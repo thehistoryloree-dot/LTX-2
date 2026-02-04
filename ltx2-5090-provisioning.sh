@@ -5,6 +5,8 @@
 # This script automates the complete setup of ComfyUI with LTX-2 video
 # generation and Z-Image-Turbo on RTX 5090 GPUs (Blackwell architecture).
 #
+# Optimized for maximum performance with automatic VRAM overflow to system RAM.
+#
 # Usage: Set this script URL as your "On-start Script" when creating a
 #        Vast.ai instance, or run manually with:
 #        curl -s https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/ltx2-5090-provisioning.sh | bash
@@ -20,57 +22,140 @@ echo "=============================================="
 WORKSPACE="${WORKSPACE:-/workspace}"
 COMFYUI_DIR=""
 
-# Detect ComfyUI directory (handles both 'ComfyUI' and 'comfyui')
-if [ -d "${WORKSPACE}/ComfyUI" ]; then
-    COMFYUI_DIR="${WORKSPACE}/ComfyUI"
-elif [ -d "${WORKSPACE}/comfyui" ]; then
-    COMFYUI_DIR="${WORKSPACE}/comfyui"
-else
-    echo "ERROR: ComfyUI directory not found in ${WORKSPACE}"
-    exit 1
-fi
-
-echo "ComfyUI directory: ${COMFYUI_DIR}"
-
 # =============================================================================
-# 1. RTX 5090 (Blackwell) Compatibility Fixes
+# 0. Wait for Vast.ai Base Provisioning to Complete
 # =============================================================================
 echo ""
-echo "--- Applying RTX 5090 Fixes ---"
+echo "--- Waiting for Vast.ai Base Provisioning ---"
 
-# Fix /etc/environment if it exists and has COMFYUI_ARGS
-if [ -f /etc/environment ]; then
-    if grep -q "COMFYUI_ARGS" /etc/environment; then
-        if ! grep -q "disable-xformers" /etc/environment; then
-            sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers"/' /etc/environment
-            echo "Added --disable-xformers to /etc/environment"
-        fi
+# Wait for provisioning lock file to be removed (Vast.ai standard)
+MAX_WAIT=600  # 10 minutes max wait
+WAITED=0
+while [ -f "/.provisioning" ]; do
+    echo "Waiting for base provisioning to complete... (${WAITED}s/${MAX_WAIT}s)"
+    sleep 10
+    WAITED=$((WAITED + 10))
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "WARNING: Timed out waiting for /.provisioning to be removed"
+        break
+    fi
+done
+
+# Wait for ComfyUI directory to exist
+MAX_WAIT=300  # 5 minutes max wait for ComfyUI
+WAITED=0
+while true; do
+    if [ -d "${WORKSPACE}/ComfyUI" ]; then
+        COMFYUI_DIR="${WORKSPACE}/ComfyUI"
+        break
+    elif [ -d "${WORKSPACE}/comfyui" ]; then
+        COMFYUI_DIR="${WORKSPACE}/comfyui"
+        break
     fi
 
+    echo "Waiting for ComfyUI to be installed... (${WAITED}s/${MAX_WAIT}s)"
+    sleep 10
+    WAITED=$((WAITED + 10))
+
+    if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "ERROR: ComfyUI directory not found after ${MAX_WAIT}s"
+        echo "Expected: ${WORKSPACE}/ComfyUI or ${WORKSPACE}/comfyui"
+        echo "Please ensure you're using a ComfyUI template on Vast.ai"
+        exit 1
+    fi
+done
+
+echo "ComfyUI directory found: ${COMFYUI_DIR}"
+
+# Wait a bit more for ComfyUI to fully initialize
+sleep 5
+
+# =============================================================================
+# 1. RTX 5090 (Blackwell) Compatibility & Performance Fixes
+# =============================================================================
+echo ""
+echo "--- Applying RTX 5090 Fixes & Performance Optimizations ---"
+
+# -----------------------------------------------------------------------------
+# Performance-optimized COMFYUI_ARGS for RTX 5090:
+#
+#   --disable-xformers          : xformers doesn't support compute capability 12.0
+#   --use-pytorch-cross-attention: Use PyTorch's native SDPA (has Flash Attention)
+#   --fast                      : Enable FP8 matrix mult, cuBLAS ops, autotune
+#   --bf16-vae                  : Use BF16 for VAE (native Blackwell support)
+#   --cuda-malloc               : Use cudaMallocAsync for better memory management
+#   --reserve-vram 2048         : Keep 2GB headroom to prevent OOM crashes
+#   --force-channels-last       : Better memory layout for modern GPUs
+#
+# NOTE: We do NOT use --highvram because:
+#   - LTX-2 19B model can exceed 32GB VRAM during generation
+#   - Default NORMAL_VRAM mode automatically offloads to system RAM when needed
+#   - This prevents crashes while maintaining good performance
+# -----------------------------------------------------------------------------
+
+OPTIMIZED_ARGS="--disable-auto-launch --port 18188 --enable-cors-header --disable-xformers --use-pytorch-cross-attention --fast --bf16-vae --cuda-malloc --reserve-vram 2048 --force-channels-last"
+
+# Fix /etc/environment
+if [ -f /etc/environment ]; then
+    # Remove old COMFYUI_ARGS and add optimized version
+    if grep -q "COMFYUI_ARGS" /etc/environment; then
+        sed -i '/^COMFYUI_ARGS=/d' /etc/environment
+    fi
+    echo "COMFYUI_ARGS=\"${OPTIMIZED_ARGS}\"" >> /etc/environment
+    echo "Updated COMFYUI_ARGS with RTX 5090 optimizations"
+
+    # Add xformers disabled flag
     if ! grep -q "XFORMERS_DISABLED" /etc/environment; then
         echo 'XFORMERS_DISABLED="1"' >> /etc/environment
-        echo "Added XFORMERS_DISABLED to /etc/environment"
+    fi
+
+    # Add PyTorch performance environment variables
+    if ! grep -q "PYTORCH_CUDA_ALLOC_CONF" /etc/environment; then
+        echo 'PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"' >> /etc/environment
+        echo "Added PYTORCH_CUDA_ALLOC_CONF for better memory management"
+    fi
+
+    if ! grep -q "CUDA_MODULE_LOADING" /etc/environment; then
+        echo 'CUDA_MODULE_LOADING="LAZY"' >> /etc/environment
+        echo "Added CUDA_MODULE_LOADING=LAZY for faster startup"
+    fi
+
+    if ! grep -q "TORCH_CUDNN_V8_API_ENABLED" /etc/environment; then
+        echo 'TORCH_CUDNN_V8_API_ENABLED="1"' >> /etc/environment
+        echo "Added cuDNN v8 API optimization"
     fi
 fi
 
 # Fix startup script if it exists
 STARTUP_SCRIPT="/opt/supervisor-scripts/comfyui.sh"
 if [ -f "${STARTUP_SCRIPT}" ]; then
-    if ! grep -q "disable-xformers" "${STARTUP_SCRIPT}"; then
-        sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers}/' "${STARTUP_SCRIPT}"
-        echo "Added --disable-xformers to startup script"
+    # Update the default args in the script
+    if grep -q "COMFYUI_ARGS=\${COMFYUI_ARGS:-" "${STARTUP_SCRIPT}"; then
+        sed -i "s|COMFYUI_ARGS=\${COMFYUI_ARGS:-[^}]*}|COMFYUI_ARGS=\${COMFYUI_ARGS:-${OPTIMIZED_ARGS}}|" "${STARTUP_SCRIPT}"
+        echo "Updated startup script with optimized args"
     fi
 
+    # Add environment exports if not present
     if ! grep -q "XFORMERS_DISABLED" "${STARTUP_SCRIPT}"; then
         sed -i '/# Launch ComfyUI/a export XFORMERS_DISABLED=1' "${STARTUP_SCRIPT}"
-        echo "Added XFORMERS_DISABLED export to startup script"
+    fi
+
+    if ! grep -q "PYTORCH_CUDA_ALLOC_CONF" "${STARTUP_SCRIPT}"; then
+        sed -i '/# Launch ComfyUI/a export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"' "${STARTUP_SCRIPT}"
+    fi
+
+    if ! grep -q "CUDA_MODULE_LOADING" "${STARTUP_SCRIPT}"; then
+        sed -i '/# Launch ComfyUI/a export CUDA_MODULE_LOADING=LAZY' "${STARTUP_SCRIPT}"
     fi
 fi
 
-# Set environment variable for current session
+# Set environment variables for current session
 export XFORMERS_DISABLED=1
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+export CUDA_MODULE_LOADING=LAZY
+export TORCH_CUDNN_V8_API_ENABLED=1
 
-echo "RTX 5090 fixes applied"
+echo "RTX 5090 performance optimizations applied"
 
 # =============================================================================
 # 2. System Dependencies
@@ -106,6 +191,7 @@ echo ""
 echo "--- Installing Custom Nodes ---"
 
 CUSTOM_NODES_DIR="${COMFYUI_DIR}/custom_nodes"
+mkdir -p "${CUSTOM_NODES_DIR}"
 cd "${CUSTOM_NODES_DIR}"
 
 # Function to install a custom node
@@ -230,11 +316,18 @@ echo "=============================================="
 echo "Provisioning Complete!"
 echo "=============================================="
 echo ""
-echo "Your ComfyUI instance is ready with:"
+echo "RTX 5090 Performance Optimizations Applied:"
+echo "  - xformers disabled (using PyTorch Flash SDPA)"
+echo "  - FP8 matrix multiplication enabled"
+echo "  - cuBLAS optimizations enabled"
+echo "  - PyTorch autotuning enabled"
+echo "  - BF16 VAE (native Blackwell support)"
+echo "  - Channels-last memory format"
+echo "  - 2GB VRAM reserved for headroom"
+echo "  - Automatic VRAM->RAM overflow enabled"
+echo "  - Expandable memory segments enabled"
 echo ""
-echo "  RTX 5090 Compatibility:"
-echo "    - xformers disabled (using PyTorch SDPA)"
-echo ""
+echo "Models Installed:"
 echo "  LTX-2 Video Generation:"
 echo "    - LTX-2 19B Distilled FP8 checkpoint"
 echo "    - LTX-2 Spatial Upscaler 2x"
@@ -245,14 +338,9 @@ echo "    - Qwen 3 4B Text Encoder"
 echo "    - Z-Image-Turbo BF16 Diffusion Model"
 echo "    - Z-Image-Turbo VAE"
 echo ""
-echo "  Custom Nodes:"
-echo "    - ComfyUI-Manager"
-echo "    - ComfyUI-LTXVideo"
-echo "    - ComfyUI-Impact-Pack"
-echo "    - rgthree-comfy"
-echo "    - ComfyUI-KJNodes"
-echo "    - Comfyui_TTP_Toolset"
-echo "    - ComfyMath"
+echo "Custom Nodes (7):"
+echo "  ComfyUI-Manager, LTXVideo, Impact-Pack,"
+echo "  rgthree, KJNodes, TTP_Toolset, ComfyMath"
 echo ""
 echo "Access ComfyUI at: http://localhost:18188"
 echo "=============================================="
