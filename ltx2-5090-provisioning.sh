@@ -183,46 +183,6 @@ fi
 pip install -q bitsandbytes accelerate
 
 echo "Python dependencies installed"
-
-# =============================================================================
-# 4. Custom Nodes Installation
-# =============================================================================
-echo ""
-echo "--- Installing Custom Nodes ---"
-
-CUSTOM_NODES_DIR="${COMFYUI_DIR}/custom_nodes"
-mkdir -p "${CUSTOM_NODES_DIR}"
-cd "${CUSTOM_NODES_DIR}"
-
-# Function to install a custom node
-install_node() {
-    local repo_url=$1
-    local node_name=$(basename "$repo_url" .git)
-
-    if [ -d "${node_name}" ]; then
-        echo "  [SKIP] ${node_name} already exists"
-    else
-        echo "  [INSTALL] ${node_name}"
-        git clone --depth 1 -q "${repo_url}"
-
-        # Install requirements if they exist
-        if [ -f "${node_name}/requirements.txt" ]; then
-            pip install -q -r "${node_name}/requirements.txt"
-        fi
-    fi
-}
-
-# Install all required custom nodes
-install_node "https://github.com/Comfy-Org/ComfyUI-Manager.git"
-install_node "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
-install_node "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git"
-install_node "https://github.com/rgthree/rgthree-comfy.git"
-install_node "https://github.com/kijai/ComfyUI-KJNodes.git"
-install_node "https://github.com/TTPlanetPig/Comfyui_TTP_Toolset.git"
-install_node "https://github.com/evanspearman/ComfyMath.git"
-
-echo "Custom nodes installed"
-
 # =============================================================================
 # 5. LTX-2 Model Downloads
 # =============================================================================
