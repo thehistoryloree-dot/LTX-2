@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
-# LTX-2 + RTX 5090 Provisioning Script for Vast.ai
+# LTX-2 + Z-Image-Turbo + RTX 5090 Provisioning Script for Vast.ai
 # =============================================================================
 # This script automates the complete setup of ComfyUI with LTX-2 video
-# generation on RTX 5090 GPUs (Blackwell architecture).
+# generation and Z-Image-Turbo on RTX 5090 GPUs (Blackwell architecture).
 #
 # Usage: Set this script URL as your "On-start Script" when creating a
 #        Vast.ai instance, or run manually with:
@@ -13,7 +13,7 @@
 set -e  # Exit on error
 
 echo "=============================================="
-echo "LTX-2 + RTX 5090 Provisioning Script"
+echo "LTX-2 + Z-Image-Turbo + RTX 5090 Provisioning"
 echo "=============================================="
 
 # --- Configuration ---
@@ -138,10 +138,10 @@ install_node "https://github.com/evanspearman/ComfyMath.git"
 echo "Custom nodes installed"
 
 # =============================================================================
-# 5. Model Downloads
+# 5. LTX-2 Model Downloads
 # =============================================================================
 echo ""
-echo "--- Downloading Models ---"
+echo "--- Downloading LTX-2 Models ---"
 
 # Function to download a file if it doesn't exist
 download_model() {
@@ -181,10 +181,36 @@ else
     git clone --depth 1 -q https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
 fi
 
-echo "Models downloaded"
+echo "LTX-2 models downloaded"
 
 # =============================================================================
-# 6. Restart ComfyUI (if supervisor is available)
+# 6. Z-Image-Turbo Model Downloads
+# =============================================================================
+echo ""
+echo "--- Downloading Z-Image-Turbo Models ---"
+
+# A. Text Encoder (Qwen) -> models/clip
+download_model \
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors" \
+    "${COMFYUI_DIR}/models/clip/qwen_3_4b.safetensors" \
+    "Z-Image-Turbo Text Encoder (Qwen 3 4B)"
+
+# B. Diffusion Model (UNet) -> models/unet
+download_model \
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors" \
+    "${COMFYUI_DIR}/models/unet/z_image_turbo_bf16.safetensors" \
+    "Z-Image-Turbo Diffusion Model"
+
+# C. VAE -> models/vae
+download_model \
+    "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors" \
+    "${COMFYUI_DIR}/models/vae/z_image_turbo_ae.safetensors" \
+    "Z-Image-Turbo VAE"
+
+echo "Z-Image-Turbo models downloaded"
+
+# =============================================================================
+# 7. Restart ComfyUI (if supervisor is available)
 # =============================================================================
 echo ""
 echo "--- Restarting ComfyUI ---"
@@ -205,11 +231,28 @@ echo "Provisioning Complete!"
 echo "=============================================="
 echo ""
 echo "Your ComfyUI instance is ready with:"
-echo "  - RTX 5090 compatibility fixes applied"
-echo "  - LTX-2 19B Distilled FP8 model"
-echo "  - LTX-2 Spatial Upscaler"
-echo "  - Gemma 3 12B 4-bit Text Encoder"
-echo "  - All required custom nodes"
+echo ""
+echo "  RTX 5090 Compatibility:"
+echo "    - xformers disabled (using PyTorch SDPA)"
+echo ""
+echo "  LTX-2 Video Generation:"
+echo "    - LTX-2 19B Distilled FP8 checkpoint"
+echo "    - LTX-2 Spatial Upscaler 2x"
+echo "    - Gemma 3 12B 4-bit Text Encoder"
+echo ""
+echo "  Z-Image-Turbo Image Generation:"
+echo "    - Qwen 3 4B Text Encoder"
+echo "    - Z-Image-Turbo BF16 Diffusion Model"
+echo "    - Z-Image-Turbo VAE"
+echo ""
+echo "  Custom Nodes:"
+echo "    - ComfyUI-Manager"
+echo "    - ComfyUI-LTXVideo"
+echo "    - ComfyUI-Impact-Pack"
+echo "    - rgthree-comfy"
+echo "    - ComfyUI-KJNodes"
+echo "    - Comfyui_TTP_Toolset"
+echo "    - ComfyMath"
 echo ""
 echo "Access ComfyUI at: http://localhost:18188"
 echo "=============================================="
