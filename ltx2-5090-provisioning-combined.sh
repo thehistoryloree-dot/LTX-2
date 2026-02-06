@@ -62,6 +62,8 @@ echo ""
 echo "--- Setting up LTX-Video Custom Nodes ---"
 
 cd custom_nodes
+
+# LTX-Video Custom Node
 if [ ! -d "ComfyUI-LTXVideo" ]; then
     git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git
     cd ComfyUI-LTXVideo
@@ -70,6 +72,37 @@ if [ ! -d "ComfyUI-LTXVideo" ]; then
 else
     echo "ComfyUI-LTXVideo already installed"
 fi
+
+# ComfyMath Custom Node
+if [ ! -d "ComfyMath" ]; then
+    echo "Installing ComfyMath..."
+    git clone https://github.com/evanspearman/ComfyMath.git
+    cd ComfyMath
+    if [ -f "requirements.txt" ]; then
+        pip install -r requirements.txt
+    fi
+    cd ..
+else
+    echo "ComfyMath already installed"
+fi
+
+# ComfyUI-Impact-Pack Custom Node
+if [ ! -d "ComfyUI-Impact-Pack" ]; then
+    echo "Installing ComfyUI-Impact-Pack..."
+    git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git
+    cd ComfyUI-Impact-Pack
+    if [ -f "requirements.txt" ]; then
+        pip install -r requirements.txt
+    fi
+    # Impact Pack has an install script
+    if [ -f "install.py" ]; then
+        python install.py
+    fi
+    cd ..
+else
+    echo "ComfyUI-Impact-Pack already installed"
+fi
+
 cd ..
 
 # ============================================
@@ -149,29 +182,10 @@ fi
 cd ..
 
 # ============================================
-# PART 6: DOWNLOAD LORAS
+# PART 6: ADDITIONAL LORAS (if needed)
 # ============================================
 echo ""
-echo "--- Downloading LoRAs ---"
-
-mkdir -p loras
-cd loras
-
-# D. Z-Image Pixel Art LoRA
-if [ ! -f "pixel_art_style_z_image_turbo.safetensors" ]; then
-    echo "Downloading Pixel Art LoRA..."
-    wget -O pixel_art_style_z_image_turbo.safetensors "https://huggingface.co/tarn59/pixel_art_style_lora_z_image_turbo/resolve/main/pixel_art_style_z_image_turbo.safetensors"
-else
-    echo "Pixel Art LoRA already exists"
-fi
-
-# Studio Ghibli (For SDXL usage)
-if [ ! -f "StudioGhibli.Redmond-V2-Std.safetensors" ]; then
-    echo "Downloading Studio Ghibli LoRA..."
-    wget -O StudioGhibli.Redmond-V2-Std.safetensors "https://huggingface.co/artificialguybr/StudioGhibli.Redmond-V2/resolve/main/StudioGhibli.Redmond-V2-Std.safetensors"
-else
-    echo "Studio Ghibli LoRA already exists"
-fi
+echo "--- LoRA Section (Skipped - No LoRAs configured) ---"
 
 # ============================================
 # PART 7: RESTART COMFYUI
