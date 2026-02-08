@@ -63,7 +63,7 @@ echo "--- Setting up LTX-Video Custom Nodes ---"
 
 cd custom_nodes
 
-# LTX-Video Custom Node
+# 1. ComfyUI-LTXVideo Custom Node
 if [ ! -d "ComfyUI-LTXVideo" ]; then
     git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git
     cd ComfyUI-LTXVideo
@@ -73,20 +73,50 @@ else
     echo "ComfyUI-LTXVideo already installed"
 fi
 
-# ComfyMath Custom Node
-if [ ! -d "ComfyMath" ]; then
-    echo "Installing ComfyMath..."
-    git clone https://github.com/evanspearman/ComfyMath.git
-    cd ComfyMath
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    fi
-    cd ..
-else
-    echo "ComfyMath already installed"
+# 2. ComfyMath (Force Reinstall)
+rm -rf ComfyMath
+echo "Installing ComfyMath..."
+git clone https://github.com/evanspearman/ComfyMath.git
+cd ComfyMath
+if [ -f "requirements.txt" ]; then
+    pip install -r requirements.txt
 fi
+cd ..
 
-# ComfyUI-Impact-Pack Custom Node
+# 3. Comfyui_TTP_Toolset (Force Reinstall)
+rm -rf Comfyui_TTP_Toolset
+echo "Installing Comfyui_TTP_Toolset..."
+git clone https://github.com/TTPlanetPig/Comfyui_TTP_Toolset.git
+cd Comfyui_TTP_Toolset
+pip install -r requirements.txt
+pip install opencv-python numpy
+cd ..
+
+# 4. ComfyUI-VideoHelperSuite (Force Reinstall)
+rm -rf ComfyUI-VideoHelperSuite
+echo "Installing ComfyUI-VideoHelperSuite..."
+git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
+cd ComfyUI-VideoHelperSuite
+pip install -r requirements.txt
+cd ..
+
+# 5. ComfyUI-KJNodes (Force Reinstall)
+rm -rf ComfyUI-KJNodes
+echo "Installing ComfyUI-KJNodes..."
+git clone https://github.com/kijai/ComfyUI-KJNodes.git
+cd ComfyUI-KJNodes
+pip install -r requirements.txt
+cd ..
+
+# 6. rgthree-comfy (Force Reinstall)
+rm -rf rgthree-comfy
+echo "Installing rgthree-comfy..."
+git clone https://github.com/rgthree/rgthree-comfy.git
+cd rgthree-comfy
+pip install -r requirements.txt
+cd ..
+
+# 7. ComfyUI-Impact-Pack (Existing check)
 if [ ! -d "ComfyUI-Impact-Pack" ]; then
     echo "Installing ComfyUI-Impact-Pack..."
     git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git
@@ -94,7 +124,6 @@ if [ ! -d "ComfyUI-Impact-Pack" ]; then
     if [ -f "requirements.txt" ]; then
         pip install -r requirements.txt
     fi
-    # Impact Pack has an install script
     if [ -f "install.py" ]; then
         python install.py
     fi
