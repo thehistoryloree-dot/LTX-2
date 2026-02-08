@@ -52,59 +52,66 @@ echo "Installing in: $(pwd)"
 apt-get update && apt-get install -y git-lfs
 git lfs install
 
+# CRUCIAL: ComfyUI uses its own venv at /venv/main/, NOT system Python.
+# Packages must be installed there for ComfyUI to see them.
+PIP="/venv/main/bin/pip"
+PYTHON="/venv/main/bin/python"
+
 # Install Python libraries specifically for 4-bit LTX models (Crucial Fix)
-pip install bitsandbytes accelerate
+$PIP install 'accelerate>=1.1.0' 'bitsandbytes>=0.43.0'
 
 # ============================================
-# PART 3: INSTALL LTX-VIDEO CUSTOM NODES
+# PART 3: INSTALL ALL CUSTOM NODES
 # ============================================
 echo ""
-echo "--- Setting up LTX-Video Custom Nodes ---"
+echo "--- Setting up Custom Nodes ---"
 
 cd custom_nodes
 
-# LTX-Video Custom Node
-if [ ! -d "ComfyUI-LTXVideo" ]; then
-    echo "Installing ComfyUI-LTXVideo..."
-    git clone https://github.com/Lightricks/ComfyUI-LTXVideo.git
-    cd ComfyUI-LTXVideo
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    fi
-    cd ..
-else
-    echo "ComfyUI-LTXVideo already installed"
-fi
+# Helper: fresh install a custom node (remove broken/partial, clone, install deps)
+install_node() {
+    local name="$1"
+    local repo="$2"
+    local extras="$3"
 
-# ComfyMath Custom Node
-if [ ! -d "ComfyMath" ]; then
-    echo "Installing ComfyMath..."
-    git clone https://github.com/evanspearman/ComfyMath.git
-    cd ComfyMath
+    if [ -d "$name" ]; then
+        echo "Removing existing $name (fresh install)..."
+        rm -rf "$name"
+    fi
+    echo "Installing $name..."
+    git clone "$repo"
+    cd "$name"
     if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
+        $PIP install -r requirements.txt
+    fi
+    if [ -n "$extras" ]; then
+        eval "$extras"
     fi
     cd ..
-else
-    echo "ComfyMath already installed"
-fi
+}
 
-# ComfyUI-Impact-Pack Custom Node
-if [ ! -d "ComfyUI-Impact-Pack" ]; then
-    echo "Installing ComfyUI-Impact-Pack..."
-    git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git
-    cd ComfyUI-Impact-Pack
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    fi
-    # Impact Pack has an install script
-    if [ -f "install.py" ]; then
-        python install.py
-    fi
-    cd ..
-else
-    echo "ComfyUI-Impact-Pack already installed"
-fi
+# --- LTX-Video ---
+install_node "ComfyUI-LTXVideo" "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
+
+# --- ComfyMath ---
+install_node "ComfyMath" "https://github.com/evanspearman/ComfyMath.git"
+
+# --- ComfyUI-Impact-Pack ---
+install_node "ComfyUI-Impact-Pack" "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git" \
+    '[ -f "install.py" ] && $PYTHON install.py'
+
+# --- TTP Toolset ---
+install_node "Comfyui_TTP_Toolset" "https://github.com/TTPlanetPig/Comfyui_TTP_Toolset.git" \
+    '$PIP install opencv-python numpy'
+
+# --- VideoHelperSuite ---
+install_node "ComfyUI-VideoHelperSuite" "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+
+# --- KJNodes ---
+install_node "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
+
+# --- rgthree-comfy ---
+install_node "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
 
 cd ..
 
