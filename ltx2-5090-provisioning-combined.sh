@@ -68,27 +68,95 @@ echo "--- Setting up Custom Nodes ---"
 
 cd custom_nodes
 
-# Helper: fresh install a custom node (remove broken/partial, clone, install deps)
+FAILED_NODES=""
+
+# Helper: install a custom node with full verification
+# Checks: git clone completeness, pip deps, extras, and __init__.py presence
 install_node() {
     local name="$1"
     local repo="$2"
     local extras="$3"
+    local max_retries=2
+    local attempt=0
 
-    if [ -d "$name" ]; then
-        echo "Removing existing $name (fresh install)..."
-        rm -rf "$name"
-    fi
-    echo "Installing $name..."
-    git clone "$repo"
-    cd "$name"
-    if [ -f "requirements.txt" ]; then
-        $PIP install -r requirements.txt
-    fi
-    if [ -n "$extras" ]; then
-        eval "$extras"
-    fi
-    cd ..
+    while [ $attempt -lt $max_retries ]; do
+        attempt=$((attempt + 1))
+        echo ""
+        echo "[$name] Attempt $attempt/$max_retries"
+
+        # Always start clean — remove any partial/broken install
+        if [ -d "$name" ]; then
+            echo "[$name] Removing existing directory..."
+            rm -rf "$name"
+        fi
+
+        # 1. Git clone with verification
+        echo "[$name] Cloning..."
+        if ! git clone --depth 1 "$repo" 2>&1; then
+            echo "[$name] ERROR: git clone failed"
+            continue
+        fi
+
+        # Verify clone completed (has .git dir and at least an __init__.py or py files)
+        if [ ! -d "$name/.git" ]; then
+            echo "[$name] ERROR: .git directory missing after clone"
+            rm -rf "$name"
+            continue
+        fi
+
+        if [ ! -f "$name/__init__.py" ] && [ -z "$(ls "$name"/*.py 2>/dev/null)" ]; then
+            echo "[$name] WARNING: No Python files found — clone may be incomplete"
+        fi
+
+        cd "$name"
+
+        # 2. Install pip dependencies with exit code check
+        if [ -f "requirements.txt" ]; then
+            echo "[$name] Installing pip dependencies..."
+            if ! $PIP install -r requirements.txt 2>&1; then
+                echo "[$name] ERROR: pip install failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
+
+        # 3. Run extras (install.py, extra pip packages, etc.)
+        if [ -n "$extras" ]; then
+            echo "[$name] Running extras..."
+            if ! eval "$extras" 2>&1; then
+                echo "[$name] ERROR: extras command failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
+
+        cd ..
+
+        # 4. Final verification — directory exists and has Python files
+        if [ -d "$name" ] && [ -d "$name/.git" ]; then
+            local py_count
+            py_count=$(find "$name" -maxdepth 2 -name "*.py" | head -5 | wc -l)
+            if [ "$py_count" -gt 0 ]; then
+                echo "[$name] OK — installed and verified ($py_count+ .py files found)"
+                return 0
+            else
+                echo "[$name] ERROR: No .py files found after install"
+                rm -rf "$name"
+                continue
+            fi
+        fi
+    done
+
+    # All retries exhausted
+    echo "[$name] FAILED after $max_retries attempts!"
+    FAILED_NODES="$FAILED_NODES $name"
+    return 1
 }
+
+# Temporarily allow failures so one bad node doesn't abort the whole script
+set +e
 
 # --- LTX-Video ---
 install_node "ComfyUI-LTXVideo" "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
@@ -112,6 +180,20 @@ install_node "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
 
 # --- rgthree-comfy ---
 install_node "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
+
+# Re-enable strict error handling
+set -e
+
+# --- Summary ---
+echo ""
+echo "========== CUSTOM NODE INSTALL SUMMARY =========="
+if [ -z "$FAILED_NODES" ]; then
+    echo "ALL 7 custom nodes installed and verified successfully!"
+else
+    echo "FAILED NODES:$FAILED_NODES"
+    echo "These nodes will need manual installation."
+fi
+echo "================================================="
 
 cd ..
 
