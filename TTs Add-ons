@@ -18,9 +18,8 @@ cd "$COMFY_DIR"
 PIP="/venv/main/bin/pip"
 PYTHON="/venv/main/bin/python"
 
-# GitHub credentials for private/auth-required repos
-GH_USER="thehistoryloree-dot"
-GH_PASS="19GBGGUFmodeldownload"
+# Disable git credential prompts (public repos, no auth needed)
+export GIT_TERMINAL_PROMPT=0
 
 # ============================================
 # 1. CUSTOM NODES
@@ -33,7 +32,7 @@ cd custom_nodes
 # comfy_mtb (for "Audio Duration (mtb)" + "ResizeImagesByLongerEdge" nodes)
 if [ ! -d "comfy_mtb" ]; then
     echo "[comfy_mtb] Cloning..."
-    git clone --depth 1 https://${GH_USER}:${GH_PASS}@github.com/melMass/comfy_mtb.git
+    git clone --depth 1 https://github.com/melMass/comfy_mtb.git
     cd comfy_mtb
     if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
     cd ..
@@ -45,7 +44,7 @@ fi
 # ComfyUI-MelBandRoformer (for vocal extraction from reference audio)
 if [ ! -d "ComfyUI-MelBandRoformer" ]; then
     echo "[ComfyUI-MelBandRoformer] Cloning..."
-    git clone --depth 1 https://${GH_USER}:${GH_PASS}@github.com/FuouM/ComfyUI-MelBandRoformer.git
+    git clone --depth 1 https://github.com/FuouM/ComfyUI-MelBandRoformer.git
     cd ComfyUI-MelBandRoformer
     if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
     cd ..
