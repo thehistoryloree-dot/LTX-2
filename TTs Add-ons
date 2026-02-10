@@ -1,92 +1,301 @@
 #!/bin/bash
-# TTS Addon Provisioning - Run AFTER the main provisioning script
-# Installs only the missing custom nodes for workflow_video_tts.json
+# ================================================================
+# Provisioning for TTS Split Workflows (RTX 5090 / Vast.ai)
+# ================================================================
+# Installs ONLY what's needed for:
+#   1. workflow_tts_only.json      (Qwen3-TTS → audio)
+#   2. workflow_video_with_audio.json (LTX-2 + Gemma CLIP → video)
 #
-# The workflow has been rewired to use CheckpointLoaderSimple (your existing
-# ltx-2-19b-distilled-fp8.safetensors) instead of GGUF models.
-# NO extra model downloads needed — only 2 custom nodes.
+# Run on a fresh Vast.ai ComfyUI instance via SSH:
+#   bash provision_tts_split.sh
+#
+# Total download: ~32GB (LTX-2 19GB + Gemma 7GB + TTS 5GB + upscaler)
+# Time: ~10-15 min on fast connection
+# ================================================================
+
 set -e
 
 echo "========================================================"
-echo "TTS Addon: Custom Nodes for Talking Avatar Workflow"
+echo " TTS Split Workflow Provisioning"
+echo " LTX-2 + Gemma-3-12B + Qwen3-TTS + Audio VAE"
 echo "========================================================"
 
+# ============================================
+# 1. RTX 5090 FLAGS
+# ============================================
+echo ""
+echo "--- Configuring RTX 5090 Flags ---"
+
+if grep -q "COMFYUI_ARGS=" /etc/environment 2>/dev/null; then
+    if ! grep -q "disable-xformers" /etc/environment; then
+        sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers --disable-smart-memory"/' /etc/environment
+        echo "Updated /etc/environment"
+    else
+        echo "/etc/environment already configured"
+    fi
+fi
+
+if [ -f /opt/supervisor-scripts/comfyui.sh ]; then
+    if ! grep -q "disable-xformers" /opt/supervisor-scripts/comfyui.sh; then
+        sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers --disable-smart-memory}/' /opt/supervisor-scripts/comfyui.sh
+        echo "Updated comfyui.sh defaults"
+    fi
+fi
+
+# ============================================
+# 2. SYSTEM SETUP
+# ============================================
+echo ""
+echo "--- System Setup ---"
+
 cd /workspace
-if [ -d "ComfyUI" ]; then COMFY_DIR="ComfyUI"; else COMFY_DIR="comfyui"; fi
+if [ -d "ComfyUI" ]; then
+    COMFY_DIR="ComfyUI"
+else
+    COMFY_DIR="comfyui"
+fi
 cd "$COMFY_DIR"
+COMFY_ROOT="$(pwd)"
+echo "ComfyUI root: $COMFY_ROOT"
+
+apt-get update -qq && apt-get install -y -qq git-lfs ffmpeg > /dev/null 2>&1
+git lfs install > /dev/null 2>&1
 
 PIP="/venv/main/bin/pip"
 PYTHON="/venv/main/bin/python"
 
-# Disable git credential prompts (public repos, no auth needed)
-export GIT_TERMINAL_PROMPT=0
+# Python deps for 4-bit models + TTS
+$PIP install -q 'accelerate>=1.1.0' 'bitsandbytes>=0.43.0' 'huggingface_hub'
 
 # ============================================
-# 1. CUSTOM NODES
-# ============================================
-echo ""
-echo "--- Installing Missing Custom Nodes ---"
-
-cd custom_nodes
-
-# comfy_mtb (for "Audio Duration (mtb)" + "ResizeImagesByLongerEdge" nodes)
-if [ ! -d "comfy_mtb" ]; then
-    echo "[comfy_mtb] Cloning..."
-    git clone --depth 1 https://github.com/melMass/comfy_mtb.git
-    cd comfy_mtb
-    if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
-    cd ..
-    echo "[comfy_mtb] OK"
-else
-    echo "[comfy_mtb] Already installed"
-fi
-
-# ComfyUI-MelBandRoformer (for vocal extraction from reference audio)
-if [ ! -d "ComfyUI-MelBandRoformer" ]; then
-    echo "[ComfyUI-MelBandRoformer] Cloning..."
-    git clone --depth 1 https://github.com/FuouM/ComfyUI-MelBandRoformer.git
-    cd ComfyUI-MelBandRoformer
-    if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
-    cd ..
-    echo "[ComfyUI-MelBandRoformer] OK"
-else
-    echo "[ComfyUI-MelBandRoformer] Already installed"
-fi
-
-cd /workspace/$COMFY_DIR
-
-# ============================================
-# 2. ENSURE MELBAND MODEL DIRECTORY EXISTS
+# 3. CUSTOM NODES
 # ============================================
 echo ""
-echo "--- MelBandRoFormer Model ---"
+echo "--- Installing Custom Nodes ---"
 
-# The model auto-downloads on first use, but ensure directory exists
-mkdir -p models/MelBandRoformer
-if [ -f "models/MelBandRoformer/MelBandRoformer_fp16.safetensors" ]; then
-    echo "MelBandRoFormer model already exists"
+cd "$COMFY_ROOT/custom_nodes"
+
+FAILED_NODES=""
+
+install_node() {
+    local name="$1"
+    local repo="$2"
+    local extras="$3"
+    local max_retries=2
+    local attempt=0
+
+    while [ $attempt -lt $max_retries ]; do
+        attempt=$((attempt + 1))
+        echo ""
+        echo "[$name] Attempt $attempt/$max_retries"
+
+        if [ -d "$name" ]; then
+            echo "[$name] Removing existing..."
+            rm -rf "$name"
+        fi
+
+        if ! git clone --depth 1 "$repo" 2>&1; then
+            echo "[$name] ERROR: git clone failed"
+            continue
+        fi
+
+        if [ ! -d "$name/.git" ]; then
+            echo "[$name] ERROR: .git missing"
+            rm -rf "$name"
+            continue
+        fi
+
+        cd "$name"
+
+        if [ -f "requirements.txt" ]; then
+            echo "[$name] Installing deps..."
+            if ! $PIP install -r requirements.txt 2>&1; then
+                echo "[$name] ERROR: pip install failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
+
+        if [ -n "$extras" ]; then
+            echo "[$name] Running extras..."
+            if ! eval "$extras" 2>&1; then
+                echo "[$name] ERROR: extras failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
+
+        cd ..
+
+        if [ -d "$name/.git" ]; then
+            echo "[$name] OK"
+            return 0
+        fi
+    done
+
+    echo "[$name] FAILED!"
+    FAILED_NODES="$FAILED_NODES $name"
+    return 1
+}
+
+set +e
+
+# ── LTX-Video (all LTXV* nodes, LatentUpscaleModelLoader) ──
+install_node "ComfyUI-LTXVideo" \
+    "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
+
+# ── KJNodes (ImageResizeKJv2, SimpleCalculatorKJ, INTConstant, ResizeImagesByLongerEdge) ──
+install_node "ComfyUI-KJNodes" \
+    "https://github.com/kijai/ComfyUI-KJNodes.git"
+
+# ── VideoHelperSuite (VHS_VideoCombine) ──
+install_node "ComfyUI-VideoHelperSuite" \
+    "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+
+# ── Qwen3-TTS (AILab_Qwen3TTSVoiceClone, TrimAudioDuration) ──
+install_node "ComfyUI-QwenTTS" \
+    "https://github.com/1038lab/ComfyUI-QwenTTS.git" \
+    '$PIP install accelerate>=1.12.0 einops>=0.8.1 librosa>=0.11.0 soundfile>=0.13.1 tiktoken>=0.12.0 torchaudio sentencepiece>=0.2.1 "transformers>=4.51,<5"'
+
+# ── MTB Nodes (Audio Duration) ──
+install_node "comfy_mtb" \
+    "https://github.com/melMass/comfy_mtb.git"
+
+# ── Impact-Pack (ResizeImageMaskNode, SolidMask) ──
+install_node "ComfyUI-Impact-Pack" \
+    "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git" \
+    '[ -f "install.py" ] && $PYTHON install.py'
+
+# ── ComfyMath (ManualSigmas) ──
+install_node "ComfyMath" \
+    "https://github.com/evanspearman/ComfyMath.git"
+
+set -e
+
+echo ""
+echo "========== CUSTOM NODE SUMMARY =========="
+if [ -z "$FAILED_NODES" ]; then
+    echo "ALL 7 custom nodes installed!"
 else
-    echo "MelBandRoFormer model will auto-download on first TTS run"
+    echo "FAILED:$FAILED_NODES"
+fi
+echo "========================================="
+
+# ============================================
+# 4. MODELS — LTX-2
+# ============================================
+echo ""
+echo "--- Downloading LTX-2 Models ---"
+
+cd "$COMFY_ROOT/models"
+
+# 4a. LTX-2 Checkpoint (~19GB fp8)
+cd checkpoints
+if [ ! -f "ltx-2-19b-distilled-fp8.safetensors" ]; then
+    echo "Downloading LTX-2 19B fp8 checkpoint (~19GB)..."
+    wget -q --show-progress -O ltx-2-19b-distilled-fp8.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-fp8.safetensors?download=true"
+else
+    echo "[skip] LTX-2 checkpoint exists"
+fi
+cd ..
+
+# 4b. LTX Spatial Upscaler
+mkdir -p latent_upscale_models
+cd latent_upscale_models
+if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
+    echo "Downloading LTX-2 spatial upscaler..."
+    wget -q --show-progress -O ltx-2-spatial-upscaler-x2-1.0.safetensors \
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors?download=true"
+else
+    echo "[skip] LTX upscaler exists"
+fi
+cd ..
+
+# ============================================
+# 5. MODEL — Gemma-3-12B Text Encoder
+# ============================================
+echo ""
+echo "--- Downloading Gemma-3 Text Encoder ---"
+
+mkdir -p text_encoders
+cd text_encoders
+if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
+    echo "Downloading Gemma-3-12B 4-bit (~7GB)..."
+    git clone https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
+else
+    echo "[skip] Gemma-3-12B exists"
+fi
+cd ..
+
+# ============================================
+# 6. MODELS — Qwen3-TTS
+# ============================================
+echo ""
+echo "--- Downloading Qwen3-TTS Models ---"
+
+cd "$COMFY_ROOT"
+mkdir -p models/TTS/Qwen3-TTS
+
+# 6a. 1.7B CustomVoice model (~4.5GB)
+if [ ! -f "models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice/model.safetensors" ]; then
+    echo "Downloading Qwen3-TTS 1.7B CustomVoice (~4.5GB)..."
+    $PYTHON -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice',
+    local_dir='$COMFY_ROOT/models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice'
+)
+"
+else
+    echo "[skip] Qwen3-TTS 1.7B exists"
+fi
+
+# 6b. Tokenizer (~682MB) — required audio codec
+if [ ! -f "models/TTS/Qwen3-TTS/Qwen3-TTS-Tokenizer-12Hz/model.safetensors" ]; then
+    echo "Downloading Qwen3-TTS Tokenizer (~682MB)..."
+    $PYTHON -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    'Qwen/Qwen3-TTS-Tokenizer-12Hz',
+    local_dir='$COMFY_ROOT/models/TTS/Qwen3-TTS/Qwen3-TTS-Tokenizer-12Hz'
+)
+"
+else
+    echo "[skip] Qwen3-TTS Tokenizer exists"
 fi
 
 # ============================================
-# 3. RESTART COMFYUI
+# 7. MARKER FILE + RESTART
 # ============================================
 echo ""
-echo "=============================================="
-echo "TTS Addon Complete! Restarting ComfyUI..."
-echo "=============================================="
+
+# Mark provisioning complete
+touch /workspace/.tts_split_ready
+
+echo "========================================================"
+echo " PROVISIONING COMPLETE"
+echo "========================================================"
+echo ""
+echo " Custom nodes:  7 installed"
+echo " Models:"
+echo "   LTX-2 19B fp8      (~19GB) - video generation"
+echo "   LTX-2 upscaler     (~1GB)  - stage 2 upscale"
+echo "   Gemma-3-12B 4bit   (~7GB)  - text encoder (CLIP)"
+echo "   Qwen3-TTS 1.7B     (~4.5GB)- voice synthesis"
+echo "   Qwen3-TTS Tokenizer(~682MB)- audio codec"
+echo ""
+echo " Restarting ComfyUI..."
 
 if command -v supervisorctl &> /dev/null; then
     supervisorctl restart comfyui
-    echo "ComfyUI restarted!"
+    echo " ComfyUI restarting..."
     echo ""
-    echo "New capabilities:"
-    echo "  - Audio Duration (mtb) — auto frame count from speech length"
-    echo "  - MelBandRoFormer — vocal extraction for voice cloning"
-    echo ""
-    echo "No extra models downloaded — workflow uses your existing"
-    echo "ltx-2-19b-distilled-fp8.safetensors via CheckpointLoaderSimple"
+    echo " After ComfyUI is ready, run:"
+    echo "   python generate_tts_audio.py        # Step 1: TTS audio"
+    echo "   python generate_video_from_audio.py  # Step 2: Video gen"
 else
-    echo "Please restart ComfyUI manually."
+    echo " Please restart ComfyUI manually."
 fi
