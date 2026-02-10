@@ -1,0 +1,89 @@
+#!/bin/bash
+# TTS Addon Provisioning - Run AFTER the main provisioning script
+# Installs only the missing custom nodes for workflow_video_tts.json
+#
+# The workflow has been rewired to use CheckpointLoaderSimple (your existing
+# ltx-2-19b-distilled-fp8.safetensors) instead of GGUF models.
+# NO extra model downloads needed — only 2 custom nodes.
+set -e
+
+echo "========================================================"
+echo "TTS Addon: Custom Nodes for Talking Avatar Workflow"
+echo "========================================================"
+
+cd /workspace
+if [ -d "ComfyUI" ]; then COMFY_DIR="ComfyUI"; else COMFY_DIR="comfyui"; fi
+cd "$COMFY_DIR"
+
+PIP="/venv/main/bin/pip"
+PYTHON="/venv/main/bin/python"
+
+# ============================================
+# 1. CUSTOM NODES
+# ============================================
+echo ""
+echo "--- Installing Missing Custom Nodes ---"
+
+cd custom_nodes
+
+# comfy_mtb (for "Audio Duration (mtb)" + "ResizeImagesByLongerEdge" nodes)
+if [ ! -d "comfy_mtb" ]; then
+    echo "[comfy_mtb] Cloning..."
+    git clone --depth 1 https://github.com/melMass/comfy_mtb.git
+    cd comfy_mtb
+    if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
+    cd ..
+    echo "[comfy_mtb] OK"
+else
+    echo "[comfy_mtb] Already installed"
+fi
+
+# ComfyUI-MelBandRoformer (for vocal extraction from reference audio)
+if [ ! -d "ComfyUI-MelBandRoformer" ]; then
+    echo "[ComfyUI-MelBandRoformer] Cloning..."
+    git clone --depth 1 https://github.com/FuouM/ComfyUI-MelBandRoformer.git
+    cd ComfyUI-MelBandRoformer
+    if [ -f "requirements.txt" ]; then $PIP install -r requirements.txt; fi
+    cd ..
+    echo "[ComfyUI-MelBandRoformer] OK"
+else
+    echo "[ComfyUI-MelBandRoformer] Already installed"
+fi
+
+cd /workspace/$COMFY_DIR
+
+# ============================================
+# 2. ENSURE MELBAND MODEL DIRECTORY EXISTS
+# ============================================
+echo ""
+echo "--- MelBandRoFormer Model ---"
+
+# The model auto-downloads on first use, but ensure directory exists
+mkdir -p models/MelBandRoformer
+if [ -f "models/MelBandRoformer/MelBandRoformer_fp16.safetensors" ]; then
+    echo "MelBandRoFormer model already exists"
+else
+    echo "MelBandRoFormer model will auto-download on first TTS run"
+fi
+
+# ============================================
+# 3. RESTART COMFYUI
+# ============================================
+echo ""
+echo "=============================================="
+echo "TTS Addon Complete! Restarting ComfyUI..."
+echo "=============================================="
+
+if command -v supervisorctl &> /dev/null; then
+    supervisorctl restart comfyui
+    echo "ComfyUI restarted!"
+    echo ""
+    echo "New capabilities:"
+    echo "  - Audio Duration (mtb) — auto frame count from speech length"
+    echo "  - MelBandRoFormer — vocal extraction for voice cloning"
+    echo ""
+    echo "No extra models downloaded — workflow uses your existing"
+    echo "ltx-2-19b-distilled-fp8.safetensors via CheckpointLoaderSimple"
+else
+    echo "Please restart ComfyUI manually."
+fi
