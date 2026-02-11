@@ -1,0 +1,113 @@
+#!/bin/bash
+# Z-Image-Only Provisioning for Vast.ai ComfyUI instances
+# Lightweight setup for thumbnail/image generation only (no LTX-2, no TTS)
+# ~15 GB total download vs ~45 GB for full provisioning
+
+set -e
+
+echo "========================================================"
+echo "Z-Image Turbo - Lightweight Provisioning"
+echo "========================================================"
+
+# ============================================
+# PART 1: RTX 5090 CONFIGURATION FLAGS
+# ============================================
+echo ""
+echo "--- Configuring RTX 5090 Flags ---"
+
+if grep -q "COMFYUI_ARGS=" /etc/environment; then
+    if ! grep -q "disable-xformers" /etc/environment; then
+        sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers --disable-smart-memory"/' /etc/environment
+        echo "Updated /etc/environment with RTX 5090 flags"
+    else
+        echo "/etc/environment already configured"
+    fi
+fi
+
+if [ -f /opt/supervisor-scripts/comfyui.sh ]; then
+    if ! grep -q "disable-xformers" /opt/supervisor-scripts/comfyui.sh; then
+        sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers --disable-smart-memory}/' /opt/supervisor-scripts/comfyui.sh
+        echo "Updated comfyui.sh defaults"
+    fi
+fi
+
+# ============================================
+# PART 2: SYSTEM SETUP & FOLDER DETECTION
+# ============================================
+echo ""
+echo "--- System Setup ---"
+
+cd /workspace
+if [ -d "ComfyUI" ]; then
+    COMFY_DIR="ComfyUI"
+else
+    COMFY_DIR="comfyui"
+fi
+cd "$COMFY_DIR"
+echo "Installing in: $(pwd)"
+
+PIP="/venv/main/bin/pip"
+PYTHON="/venv/main/bin/python"
+
+# ============================================
+# PART 3: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
+# ============================================
+echo ""
+echo "--- Downloading Z-Image-Turbo Models ---"
+
+cd models
+
+# A. Text Encoder (Qwen) -> models/clip
+mkdir -p clip
+cd clip
+if [ ! -f "qwen_3_4b.safetensors" ]; then
+    echo "Downloading Qwen Text Encoder (~8 GB)..."
+    wget -O qwen_3_4b.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors"
+else
+    echo "Qwen Text Encoder already exists"
+fi
+cd ..
+
+# B. Diffusion Model (UNet) -> models/unet
+mkdir -p unet
+cd unet
+if [ ! -f "z_image_turbo_bf16.safetensors" ]; then
+    echo "Downloading Z-Image Turbo UNet (~6 GB)..."
+    wget -O z_image_turbo_bf16.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors"
+else
+    echo "Z-Image Turbo UNet already exists"
+fi
+cd ..
+
+# C. VAE -> models/vae
+mkdir -p vae
+cd vae
+if [ ! -f "z_image_turbo_ae.safetensors" ]; then
+    echo "Downloading Z-Image VAE (~300 MB)..."
+    wget -O z_image_turbo_ae.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
+else
+    echo "Z-Image VAE already exists"
+fi
+cd ..
+
+# ============================================
+# PART 4: MARKER FILE + RESTART
+# ============================================
+echo ""
+echo "--- Finalizing ---"
+
+cd /workspace
+touch .zimage_ready
+echo "Z-Image marker file created: /workspace/.zimage_ready"
+
+echo ""
+echo "=============================================="
+echo "Z-Image Turbo provisioning complete!"
+echo "=============================================="
+
+if command -v supervisorctl &> /dev/null; then
+    supervisorctl restart comfyui
+    echo "ComfyUI restarted. Z-Image Turbo ready for thumbnail generation!"
+else
+    echo "Please restart ComfyUI manually."
+fi
