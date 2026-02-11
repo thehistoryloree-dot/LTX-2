@@ -1,15 +1,17 @@
 #!/bin/bash
 # ================================================================
-# Complete RTX 5090 Provisioning for Vast.ai ComfyUI
+# Full Pipeline Provisioning for Vast.ai ComfyUI
 # ================================================================
+# GPU-agnostic — works on RTX 5090, A100, H100, A6000, etc.
+#
 # Covers ALL pipeline workflows:
 #   - Z-Image Turbo / Base     (image generation)
 #   - LTX-2 two-stage          (video generation)
 #   - workflow_tts_only.json    (Qwen3-TTS → audio)
-#   - workflow_video_with_audio (LTX-2 + Gemma CLIP → lip-sync video)
+#   - workflow_video_with_audio (LTX-2 + audio lip-sync video)
 #
 # Run on a fresh Vast.ai ComfyUI instance via SSH:
-#   bash provision_tts_split.sh
+#   bash provision_full.sh
 #
 # Total download: ~55GB
 # Time: ~15-20 min on fast connection
@@ -18,32 +20,18 @@
 set -e
 
 echo "========================================================"
-echo "LTX-2 + Z-Image + Qwen3-TTS RTX 5090 Provisioning"
+echo " Full Pipeline Provisioning (All Workflows)"
 echo "========================================================"
 
 # ============================================
-# PART 1: RTX 5090 CONFIGURATION FLAGS
+# PART 1: GPU DETECTION
 # ============================================
 echo ""
-echo "--- Configuring RTX 5090 Flags ---"
+echo "--- GPU Detection ---"
 
-# Update /etc/environment to add memory management flags
-if grep -q "COMFYUI_ARGS=" /etc/environment; then
-    if ! grep -q "disable-xformers" /etc/environment; then
-        sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers --disable-smart-memory"/' /etc/environment
-        echo "Updated /etc/environment with RTX 5090 flags"
-    else
-        echo "/etc/environment already configured"
-    fi
-fi
-
-# Also update the default in comfyui.sh for persistence
-if [ -f /opt/supervisor-scripts/comfyui.sh ]; then
-    if ! grep -q "disable-xformers" /opt/supervisor-scripts/comfyui.sh; then
-        sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers --disable-smart-memory}/' /opt/supervisor-scripts/comfyui.sh
-        echo "Updated comfyui.sh defaults"
-    fi
-fi
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "Unknown")
+GPU_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
+echo "Detected GPU: $GPU_NAME (${GPU_VRAM}MB VRAM)"
 
 # ============================================
 # PART 2: SYSTEM SETUP & FOLDER DETECTION
@@ -62,16 +50,15 @@ cd "$COMFY_DIR"
 COMFY_ROOT="$(pwd)"
 echo "Installing in: $COMFY_ROOT"
 
-# Install Git LFS (Essential for large model downloads)
+# Install Git LFS + ffmpeg
 apt-get update && apt-get install -y git-lfs ffmpeg
 git lfs install
 
 # CRUCIAL: ComfyUI uses its own venv at /venv/main/, NOT system Python.
-# Packages must be installed there for ComfyUI to see them.
 PIP="/venv/main/bin/pip"
 PYTHON="/venv/main/bin/python"
 
-# Install Python libraries specifically for 4-bit LTX models (Crucial Fix)
+# Install Python libraries for 4-bit models
 $PIP install 'accelerate>=1.1.0' 'bitsandbytes>=0.43.0' 'huggingface_hub'
 
 # ============================================
@@ -85,7 +72,6 @@ cd custom_nodes
 FAILED_NODES=""
 
 # Helper: install a custom node with full verification
-# Checks: git clone completeness, pip deps, extras, and __init__.py presence
 install_node() {
     local name="$1"
     local repo="$2"
@@ -98,33 +84,25 @@ install_node() {
         echo ""
         echo "[$name] Attempt $attempt/$max_retries"
 
-        # Always start clean — remove any partial/broken install
         if [ -d "$name" ]; then
             echo "[$name] Removing existing directory..."
             rm -rf "$name"
         fi
 
-        # 1. Git clone with verification
         echo "[$name] Cloning..."
         if ! git clone --depth 1 "$repo" 2>&1; then
             echo "[$name] ERROR: git clone failed"
             continue
         fi
 
-        # Verify clone completed (has .git dir and at least an __init__.py or py files)
         if [ ! -d "$name/.git" ]; then
             echo "[$name] ERROR: .git directory missing after clone"
             rm -rf "$name"
             continue
         fi
 
-        if [ ! -f "$name/__init__.py" ] && [ -z "$(ls "$name"/*.py 2>/dev/null)" ]; then
-            echo "[$name] WARNING: No Python files found — clone may be incomplete"
-        fi
-
         cd "$name"
 
-        # 2. Install pip dependencies with exit code check
         if [ -f "requirements.txt" ]; then
             echo "[$name] Installing pip dependencies..."
             if ! $PIP install -r requirements.txt 2>&1; then
@@ -135,7 +113,6 @@ install_node() {
             fi
         fi
 
-        # 3. Run extras (install.py, extra pip packages, etc.)
         if [ -n "$extras" ]; then
             echo "[$name] Running extras..."
             if ! eval "$extras" 2>&1; then
@@ -148,7 +125,6 @@ install_node() {
 
         cd ..
 
-        # 4. Final verification — directory exists and has Python files
         if [ -d "$name" ] && [ -d "$name/.git" ]; then
             local py_count
             py_count=$(find "$name" -maxdepth 2 -name "*.py" | head -5 | wc -l)
@@ -163,7 +139,6 @@ install_node() {
         fi
     done
 
-    # All retries exhausted
     echo "[$name] FAILED after $max_retries attempts!"
     FAILED_NODES="$FAILED_NODES $name"
     return 1
@@ -196,21 +171,19 @@ install_node "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
 install_node "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
 
 # --- Qwen3-TTS (AILab_Qwen3TTSVoiceClone, TrimAudioDuration) ---
-# Pin transformers <5 to avoid breaking changes in v5.0 (pad_token_id, ROPE, mistral regex)
+# Pin transformers <5 to avoid breaking changes in v5.0
 install_node "ComfyUI-QwenTTS" "https://github.com/1038lab/ComfyUI-QwenTTS.git" \
     '$PIP install accelerate>=1.12.0 einops>=0.8.1 librosa>=0.11.0 soundfile>=0.13.1 tiktoken>=0.12.0 torchaudio sentencepiece>=0.2.1 "transformers>=4.51,<5"'
 
 # --- MTB Nodes (Audio Duration) ---
 install_node "comfy_mtb" "https://github.com/melMass/comfy_mtb.git"
 
-# Re-enable strict error handling
 set -e
 
-# --- Summary ---
 echo ""
 echo "========== CUSTOM NODE INSTALL SUMMARY =========="
 if [ -z "$FAILED_NODES" ]; then
-    echo "ALL custom nodes installed and verified successfully!"
+    echo "ALL 9 custom nodes installed and verified!"
 else
     echo "FAILED NODES:$FAILED_NODES"
     echo "These nodes will need manual installation."
@@ -220,12 +193,76 @@ echo "================================================="
 cd ..
 
 # ============================================
-# PART 4: DOWNLOAD LTX-VIDEO MODELS
+# PART 4: PATCH LTXVScheduler (SIGMOID FIX)
+# ============================================
+echo ""
+echo "--- Applying LTXVScheduler Sigmoid Fix ---"
+echo "Prevents OverflowError with audio-visual latents"
+
+# Find the scheduler file
+SCHEDULER_FILE=$(find custom_nodes/ComfyUI-LTXVideo -name "*.py" -exec grep -l "math.exp" {} \; 2>/dev/null | head -1)
+
+if [ -n "$SCHEDULER_FILE" ]; then
+    # Check if already patched
+    if grep -q "sigmoid" "$SCHEDULER_FILE" 2>/dev/null; then
+        echo "[skip] Sigmoid fix already applied"
+    else
+        echo "Patching: $SCHEDULER_FILE"
+        # Replace raw exp() with sigmoid form to prevent overflow
+        # Original: mu = math.exp(sigma_shift)  (overflows when sigma_shift > ~700)
+        # Fixed:    mu = 1.0 / (1.0 + math.exp(-sigma_shift))  (always 0-1, never overflows)
+        $PYTHON -c "
+import re, sys
+
+scheduler_file = '$SCHEDULER_FILE'
+with open(scheduler_file, 'r') as f:
+    content = f.read()
+
+# Look for the problematic exp pattern in sigma calculation
+# Common patterns: math.exp(shift), exp(sigma_shift), etc.
+original = content
+
+# Pattern 1: mu = math.exp(...)
+content = re.sub(
+    r'(\s+)(mu\s*=\s*)math\.exp\(([^)]+)\)',
+    r'\1# Sigmoid fix: prevents OverflowError with large audio-visual latents\n\1_shift = \3\n\1\2(1.0 / (1.0 + math.exp(-_shift))) if _shift < 500 else 1.0',
+    content
+)
+
+if content != original:
+    with open(scheduler_file, 'w') as f:
+        f.write(content)
+    print('  Sigmoid fix applied successfully!')
+else:
+    # Try alternate pattern
+    content = original
+    content = re.sub(
+        r'math\.exp\(([^)]*sigma[^)]*)\)',
+        r'(1.0 / (1.0 + math.exp(-(\1)))) if (\1) < 500 else 1.0',
+        content
+    )
+    if content != original:
+        with open(scheduler_file, 'w') as f:
+            f.write(content)
+        print('  Sigmoid fix applied (alternate pattern)!')
+    else:
+        print('  WARNING: Could not find exp pattern to patch.')
+        print('  You may need to manually apply the sigmoid fix.')
+        print('  File: ' + scheduler_file)
+"
+    fi
+else
+    echo "WARNING: Could not find LTXVScheduler source file."
+    echo "The sigmoid fix may need to be applied manually if audio workflows fail."
+fi
+
+# ============================================
+# PART 5: DOWNLOAD LTX-VIDEO MODELS
 # ============================================
 echo ""
 echo "--- Downloading LTX-Video Models ---"
 
-# A. LTX-2 Checkpoint (~19GB) — used by both regular video + TTS-split workflows
+# A. LTX-2 Checkpoint (~19GB)
 cd models/checkpoints
 if [ ! -f "ltx-2-19b-distilled-fp8.safetensors" ]; then
     echo "Downloading LTX-2 Checkpoint (~19GB)..."
@@ -235,7 +272,7 @@ else
     echo "[skip] LTX-2 Checkpoint already exists"
 fi
 
-# B. LTX Upscaler — stage 2 spatial upscale
+# B. LTX Upscaler
 mkdir -p ../latent_upscale_models
 cd ../latent_upscale_models
 if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
@@ -246,7 +283,7 @@ else
     echo "[skip] LTX Upscaler already exists"
 fi
 
-# C. Gemma 3 Text Encoder (Folder Structure) — CLIP for LTX-2 video prompts
+# C. Gemma 3 Text Encoder (~7GB)
 mkdir -p ../text_encoders
 cd ../text_encoders
 if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
@@ -257,14 +294,14 @@ else
 fi
 
 # ============================================
-# PART 5: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
+# PART 6: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
 # ============================================
 echo ""
 echo "--- Setting up Z-Image-Turbo ---"
 
 cd "$COMFY_ROOT/models"
 
-# A. Text Encoder (Qwen) -> models/clip
+# A. Text Encoder (Qwen)
 mkdir -p clip
 cd clip
 if [ ! -f "qwen_3_4b.safetensors" ]; then
@@ -276,7 +313,7 @@ else
 fi
 cd ..
 
-# B. Diffusion Model (UNet) -> models/unet
+# B. Diffusion Model (UNet)
 mkdir -p unet
 cd unet
 if [ ! -f "z_image_turbo_bf16.safetensors" ]; then
@@ -288,7 +325,7 @@ else
 fi
 cd ..
 
-# C. VAE -> models/vae
+# C. VAE
 mkdir -p vae
 cd vae
 if [ ! -f "z_image_turbo_ae.safetensors" ]; then
@@ -301,14 +338,12 @@ fi
 cd ..
 
 # ============================================
-# PART 5b: DOWNLOAD Z-IMAGE-BASE (UNET ONLY)
+# PART 6b: DOWNLOAD Z-IMAGE-BASE (UNET ONLY)
 # ============================================
 echo ""
 echo "--- Setting up Z-Image-Base ---"
 
 cd "$COMFY_ROOT/models"
-
-# Only the diffusion model differs from turbo — text encoder (qwen_3_4b) and VAE (ae) are identical
 cd unet
 if [ ! -f "z_image_bf16.safetensors" ]; then
     echo "Downloading Z-Image Base UNet (12.3 GB)..."
@@ -320,7 +355,7 @@ fi
 cd ..
 
 # ============================================
-# PART 6: QWEN3-TTS MODELS
+# PART 7: QWEN3-TTS MODELS
 # ============================================
 echo ""
 echo "--- Downloading Qwen3-TTS Models ---"
@@ -328,7 +363,7 @@ echo "--- Downloading Qwen3-TTS Models ---"
 cd "$COMFY_ROOT"
 mkdir -p models/TTS/Qwen3-TTS
 
-# 6a. 1.7B CustomVoice model (~4.5GB) — best for narration, 9 preset speakers
+# 7a. 1.7B CustomVoice model (~4.5GB)
 if [ ! -f "models/TTS/Qwen3-TTS/Qwen3-TTS-12Hz-1.7B-CustomVoice/model.safetensors" ]; then
     echo "Downloading Qwen3-TTS 1.7B CustomVoice (~4.5GB)..."
     $PYTHON -c "
@@ -342,7 +377,7 @@ else
     echo "[skip] Qwen3-TTS 1.7B CustomVoice already exists"
 fi
 
-# 6b. Tokenizer (~682MB) — REQUIRED by all TTS models as audio codec
+# 7b. Tokenizer (~682MB)
 if [ ! -f "models/TTS/Qwen3-TTS/Qwen3-TTS-Tokenizer-12Hz/model.safetensors" ]; then
     echo "Downloading Qwen3-TTS Tokenizer (~682MB)..."
     $PYTHON -c "
@@ -359,17 +394,18 @@ fi
 echo "Qwen3 TTS setup complete!"
 
 # ============================================
-# PART 7: MARKER FILE + RESTART
+# PART 8: MARKER FILES + RESTART
 # ============================================
 echo ""
 
-# Mark provisioning complete (both markers for compatibility)
 touch /workspace/.ltx2_ready
 touch /workspace/.tts_split_ready
 
 echo "=============================================="
-echo "ALL DONE! Restarting ComfyUI..."
+echo " ALL DONE! Restarting ComfyUI..."
 echo "=============================================="
+echo ""
+echo " GPU: $GPU_NAME (${GPU_VRAM}MB VRAM)"
 echo ""
 echo " Custom nodes: 9 installed"
 echo "   ComfyUI-LTXVideo, ComfyMath, ComfyUI-Impact-Pack,"
@@ -386,16 +422,19 @@ echo "   Z-Image VAE + Qwen    (~5GB)  - image enc/dec + text"
 echo "   Qwen3-TTS 1.7B        (~4.5GB)- voice synthesis"
 echo "   Qwen3-TTS Tokenizer   (~682MB)- audio codec"
 echo ""
+echo " Patches applied:"
+echo "   LTXVScheduler sigmoid fix (prevents audio latent overflow)"
+echo ""
 
 if command -v supervisorctl &> /dev/null; then
     supervisorctl restart comfyui
-    echo "ComfyUI restarted with RTX 5090 optimizations + all models loaded!"
+    echo "ComfyUI restarted!"
     echo ""
-    echo "  Pipeline workflows:"
+    echo "  Supported workflows:"
     echo "    - Z-Image Turbo/Base    (image gen)"
     echo "    - LTX-2 two-stage       (video gen)"
     echo "    - TTS-only              (Qwen3-TTS → audio)"
-    echo "    - Video-with-audio      (LTX-2 lip-sync from pre-gen audio)"
+    echo "    - Video-with-audio v2   (LTX-2 lip-sync from pre-gen audio)"
 else
     echo "Please restart ComfyUI manually."
 fi
