@@ -214,17 +214,13 @@ else
 fi
 cd ..
 
-# B. Gemma 3 12B (quantized) — text encoder for LTX-2 prompt enhancement
+# B. Gemma 3 12B (4-bit quantized) — text encoder for LTX-2 prompt enhancement
+#    Uses unsloth's public repackage (no auth required)
 mkdir -p text_encoders
 cd text_encoders
-GEMMA_DIR="gemma-3-12b-it-qat-q4_0-unquantized"
-if [ ! -d "$GEMMA_DIR" ]; then
-    echo "Downloading Gemma 3 12B text encoder (quantized, ~7GB)..."
-    GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 \
-        "https://huggingface.co/google/$GEMMA_DIR" "$GEMMA_DIR"
-    cd "$GEMMA_DIR"
-    git lfs pull --include="*.safetensors"
-    cd ..
+if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
+    echo "Downloading Gemma 3 12B text encoder (bnb-4bit, ~7GB)..."
+    git clone https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
 else
     echo "Gemma 3 12B text encoder already exists"
 fi
