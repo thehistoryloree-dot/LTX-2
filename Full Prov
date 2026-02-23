@@ -1,6 +1,6 @@
 #!/bin/bash
 # LTX-2 RTX 5090 Complete Setup Script for Vast.ai ComfyUI instances
-# Combines: RTX 5090 flags + Model downloads + Custom nodes + Qwen3-TTS
+# Combines: RTX 5090 flags + Model downloads + Custom nodes
 
 set -e
 
@@ -48,8 +48,8 @@ fi
 cd "$COMFY_DIR"
 echo "Installing in: $(pwd)"
 
-# Install Git LFS + ffmpeg + sox (audio processing for TTS)
-apt-get update && apt-get install -y git-lfs ffmpeg sox libsox-fmt-all
+# Install Git LFS (Essential for large model downloads)
+apt-get update && apt-get install -y git-lfs ffmpeg
 git lfs install
 
 # CRUCIAL: ComfyUI uses its own venv at /venv/main/, NOT system Python.
@@ -191,7 +191,7 @@ set -e
 echo ""
 echo "========== CUSTOM NODE INSTALL SUMMARY =========="
 if [ -z "$FAILED_NODES" ]; then
-    echo "ALL 8 custom nodes installed and verified successfully!"
+    echo "ALL 7 custom nodes installed and verified successfully!"
 else
     echo "FAILED NODES:$FAILED_NODES"
     echo "These nodes will need manual installation."
@@ -206,16 +206,16 @@ cd ..
 echo ""
 echo "--- Downloading LTX-Video Models ---"
 
-# A. LTX-2 Dev Checkpoint (fp8, ~10GB) — needed for audio-conditioned video (CFG 4.0)
+# A. LTX-2 Checkpoint (~27GB)
 cd models/checkpoints
 if [ ! -f "ltx-2-19b-dev-fp8.safetensors" ]; then
-    echo "Downloading LTX-2 Dev Checkpoint (fp8)..."
+    echo "Downloading LTX-2 Checkpoint..."
     wget -O ltx-2-19b-dev-fp8.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors?download=true"
 else
-    echo "LTX-2 Dev Checkpoint already exists"
+    echo "LTX-2 Checkpoint already exists"
 fi
 
-# B. LTX Spatial Upscaler (2x)
+# B. LTX Upscaler
 mkdir -p ../latent_upscale_models
 cd ../latent_upscale_models
 if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
@@ -224,6 +224,26 @@ if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
 else
     echo "LTX Upscaler already exists"
 fi
+
+mkdir -p ../loras
+cd ../loras
+if [ ! -f "ltx-2-19b-distilled-lora-384.safetensors" ]; then
+    echo "Downloading LTX-2 Distilled LoRA..."
+    wget -O ltx-2-19b-distilled-lora-384.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors?download=true"
+else
+    echo "LTX-2 Distilled LoRA already exists"
+fi
+
+mkdir -p LTX
+cd LTX
+if [ ! -f "ltx-2-19b-lora-camera-control-static.safetensors" ]; then
+    echo "Downloading LTX-2 Static Camera LoRA..."
+    wget -O ltx-2-19b-lora-camera-control-static.safetensors "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors?download=true"
+else
+    echo "LTX-2 Static Camera LoRA already exists"
+fi
+cd ../..
+
 
 # C. Gemma 3 Text Encoder (Folder Structure)
 mkdir -p ../text_encoders
@@ -234,27 +254,6 @@ if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
 else
     echo "Gemma 3 already exists"
 fi
-
-# D. Distilled LoRA (Stage 1 acceleration)
-mkdir -p ../loras
-cd ../loras
-if [ ! -f "ltx-2-19b-distilled-lora-384.safetensors" ]; then
-    echo "Downloading LTX-2 Distilled LoRA..."
-    wget -O ltx-2-19b-distilled-lora-384.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors?download=true"
-else
-    echo "LTX-2 Distilled LoRA already exists"
-fi
-
-# E. Static Camera LoRA (camera control)
-mkdir -p LTX
-cd LTX
-if [ ! -f "ltx-2-19b-lora-camera-control-static.safetensors" ]; then
-    echo "Downloading LTX-2 Static Camera LoRA..."
-    wget -O ltx-2-19b-lora-camera-control-static.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors?download=true"
-else
-    echo "LTX-2 Static Camera LoRA already exists"
-fi
-cd ../..
 
 # ============================================
 # PART 5: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
@@ -298,63 +297,7 @@ fi
 cd ..
 
 # ============================================
-# PART 6: DOWNLOAD WAN 2.2 MODELS
-# ============================================
-echo ""
-echo "--- Downloading WAN 2.2 Models ---"
-
-cd /workspace/$COMFY_DIR/models
-
-# A. Diffusion models (fp8)
-mkdir -p diffusion_models
-cd diffusion_models
-if [ ! -f "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors" ]; then
-    echo "Downloading WAN 2.2 I2V high-noise model..."
-    wget -O wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
-else
-    echo "WAN 2.2 high-noise model already exists"
-fi
-if [ ! -f "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors" ]; then
-    echo "Downloading WAN 2.2 I2V low-noise model..."
-    wget -O wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
-else
-    echo "WAN 2.2 low-noise model already exists"
-fi
-cd ..
-
-# B. UMT5-XXL text encoder (fp8)
-cd text_encoders
-if [ ! -f "umt5_xxl_fp8_e4m3fn_scaled.safetensors" ]; then
-    echo "Downloading UMT5-XXL text encoder..."
-    wget -O umt5_xxl_fp8_e4m3fn_scaled.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
-else
-    echo "UMT5-XXL text encoder already exists"
-fi
-cd ..
-
-# C. WAN VAE
-cd vae
-if [ ! -f "wan_2.1_vae.safetensors" ]; then
-    echo "Downloading WAN 2.1 VAE..."
-    wget -O wan_2.1_vae.safetensors "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan_2.1_vae.safetensors"
-else
-    echo "WAN VAE already exists"
-fi
-cd ..
-
-# D. RealESRGAN upscaler
-mkdir -p upscale_models
-cd upscale_models
-if [ ! -f "RealESRGAN_x2plus.pth" ]; then
-    echo "Downloading RealESRGAN x2plus upscaler..."
-    wget -O RealESRGAN_x2plus.pth "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth"
-else
-    echo "RealESRGAN upscaler already exists"
-fi
-cd ..
-
-# ============================================
-# PART 7: QWEN3-TTS SETUP
+# PART 6: QWEN3-TTS SETUP
 # ============================================
 echo ""
 echo "--- Setting up Qwen3-TTS ---"
@@ -514,7 +457,7 @@ TTSEOF
 echo "TTS server script created at /workspace/tts_server.py"
 
 # ============================================
-# PART 8: RESTART COMFYUI
+# PART 7: RESTART COMFYUI
 # ============================================
 echo ""
 echo "=============================================="
@@ -526,4 +469,3 @@ if command -v supervisorctl &> /dev/null; then
     echo "ComfyUI restarted with RTX 5090 optimizations + all models loaded!"
 else
     echo "Please restart ComfyUI manually."
-fi
