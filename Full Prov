@@ -208,7 +208,7 @@ cd checkpoints
 if [ ! -f "ltx-2-19b-dev-fp8.safetensors" ]; then
     echo "Downloading LTX-2 19B Dev (fp8)..."
     wget -q --show-progress -O ltx-2-19b-dev-fp8.safetensors \
-        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-2-19b-dev-fp8.safetensors"
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors"
 else
     echo "LTX-2 dev-fp8 checkpoint already exists"
 fi
@@ -235,7 +235,7 @@ cd loras
 if [ ! -f "ltx-2-19b-distilled-lora-384.safetensors" ]; then
     echo "Downloading LTX-2 distilled LoRA..."
     wget -q --show-progress -O ltx-2-19b-distilled-lora-384.safetensors \
-        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-2-19b-distilled-lora-384.safetensors"
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors"
 else
     echo "LTX-2 distilled LoRA already exists"
 fi
@@ -247,7 +247,7 @@ cd loras/LTX
 if [ ! -f "ltx-2-19b-lora-camera-control-static.safetensors" ]; then
     echo "Downloading LTX-2 static camera LoRA..."
     wget -q --show-progress -O ltx-2-19b-lora-camera-control-static.safetensors \
-        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors"
 else
     echo "LTX-2 static camera LoRA already exists"
 fi
@@ -259,7 +259,7 @@ cd latent_upscale_models
 if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
     echo "Downloading LTX-2 spatial upscaler (2x)..."
     wget -q --show-progress -O ltx-2-spatial-upscaler-x2-1.0.safetensors \
-        "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+        "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors"
 else
     echo "LTX-2 spatial upscaler already exists"
 fi
