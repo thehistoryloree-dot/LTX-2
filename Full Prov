@@ -1,394 +1,471 @@
-  #!/bin/bash
-  # LTX-2 RTX 5090 Complete Setup Script for Vast.ai ComfyUI instances                                                    # Combines: RTX 5090 flags + Model downloads + Custom nodes
-                                                                                                                          set -e
+#!/bin/bash
+# LTX-2 RTX 5090 Complete Setup Script for Vast.ai ComfyUI instances
+# Combines: RTX 5090 flags + Model downloads + Custom nodes
 
-  echo "=============================================="
-  echo "LTX-2 + RTX 5090 Complete Provisioning Script"
-  echo "=============================================="
+set -e
 
-  # ============================================
-  # PART 1: RTX 5090 CONFIGURATION FLAGS
-  # ============================================
-  echo ""
-  echo "--- Configuring RTX 5090 Flags ---"
+echo "=============================================="
+echo "LTX-2 + RTX 5090 Complete Provisioning Script"
+echo "=============================================="
 
-  # Update /etc/environment to add memory management flags
-  if grep -q "COMFYUI_ARGS=" /etc/environment; then
-      if ! grep -q "disable-xformers" /etc/environment; then
-          sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers --disable-smart-memory"/'
-  /etc/environment
-          echo "Updated /etc/environment with RTX 5090 flags"
-      else
-          echo "/etc/environment already configured"
-      fi
-  fi
+# ============================================
+# PART 1: RTX 5090 CONFIGURATION FLAGS
+# ============================================
+echo ""
+echo "--- Configuring RTX 5090 Flags ---"
 
-  # Also update the default in comfyui.sh for persistence
-  if [ -f /opt/supervisor-scripts/comfyui.sh ]; then
-      if ! grep -q "disable-xformers" /opt/supervisor-scripts/comfyui.sh; then
-          sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers --disable-smart-memory}/'
-  /opt/supervisor-scripts/comfyui.sh
-          echo "Updated comfyui.sh defaults"
-      fi
-  fi
+# Update /etc/environment to add memory management flags
+if grep -q "COMFYUI_ARGS=" /etc/environment; then
+    if ! grep -q "disable-xformers" /etc/environment; then
+        sed -i 's/COMFYUI_ARGS="\([^"]*\)"/COMFYUI_ARGS="\1 --disable-xformers --disable-smart-memory"/' /etc/environment
+        echo "Updated /etc/environment with RTX 5090 flags"
+    else
+        echo "/etc/environment already configured"
+    fi
+fi
 
-  # ============================================
-  # PART 2: SYSTEM SETUP & FOLDER DETECTION
-  # ============================================
-  echo ""
-  echo "--- System Setup ---"
+# Also update the default in comfyui.sh for persistence
+if [ -f /opt/supervisor-scripts/comfyui.sh ]; then
+    if ! grep -q "disable-xformers" /opt/supervisor-scripts/comfyui.sh; then
+        sed -i 's/--enable-cors-header}/--enable-cors-header --disable-xformers --disable-smart-memory}/' /opt/supervisor-scripts/comfyui.sh
+        echo "Updated comfyui.sh defaults"
+    fi
+fi
 
-  cd /workspace
-  # Detect if folder is 'ComfyUI' or 'comfyui' and enter it
-  if [ -d "ComfyUI" ]; then
-      COMFY_DIR="ComfyUI"
-  else
-      COMFY_DIR="comfyui"
-  fi
-  cd "$COMFY_DIR"
-  COMFY_ROOT="$(pwd)"
-  echo "Installing in: $COMFY_ROOT"
+# ============================================
+# PART 2: SYSTEM SETUP & FOLDER DETECTION
+# ============================================
+echo ""
+echo "--- System Setup ---"
 
-  # Install Git LFS (Essential for large model downloads)
-  apt-get update && apt-get install -y git-lfs
-  git lfs install
+cd /workspace
+# Detect if folder is 'ComfyUI' or 'comfyui' and enter it
+if [ -d "ComfyUI" ]; then
+    COMFY_DIR="ComfyUI"
+else
+    COMFY_DIR="comfyui"
+fi
+cd "$COMFY_DIR"
+echo "Installing in: $(pwd)"
 
-  # CRUCIAL: ComfyUI uses its own venv at /venv/main/, NOT system Python.
-  # Packages must be installed there for ComfyUI to see them.
-  PIP="/venv/main/bin/pip"
-  PYTHON="/venv/main/bin/python"
+# Install Git LFS (Essential for large model downloads)
+apt-get update && apt-get install -y git-lfs ffmpeg
+git lfs install
 
-  # Install Python libraries specifically for 4-bit LTX models (Crucial Fix)
-  $PIP install 'accelerate>=1.1.0' 'bitsandbytes>=0.43.0'
+# CRUCIAL: ComfyUI uses its own venv at /venv/main/, NOT system Python.
+# Packages must be installed there for ComfyUI to see them.
+PIP="/venv/main/bin/pip"
+PYTHON="/venv/main/bin/python"
 
-  # ============================================
-  # PART 3: INSTALL ALL CUSTOM NODES
-  # ============================================
-  echo ""
-  echo "--- Setting up Custom Nodes ---"
+# Install Python libraries specifically for 4-bit LTX models (Crucial Fix)
+$PIP install 'accelerate>=1.1.0' 'bitsandbytes>=0.43.0'
 
-  cd "$COMFY_ROOT/custom_nodes"
+# ============================================
+# PART 3: INSTALL ALL CUSTOM NODES
+# ============================================
+echo ""
+echo "--- Setting up Custom Nodes ---"
 
-  FAILED_NODES=""
+cd custom_nodes
 
-  # Helper: install a custom node with full verification
-  # Checks: git clone completeness, pip deps, extras, and __init__.py presence
-  install_node() {
-      local name="$1"
-      local repo="$2"
-      local extras="$3"
-      local max_retries=2
-      local attempt=0
+FAILED_NODES=""
 
-      while [ $attempt -lt $max_retries ]; do
-          attempt=$((attempt + 1))
-          echo ""
-          echo "[$name] Attempt $attempt/$max_retries"
+# Helper: install a custom node with full verification
+# Checks: git clone completeness, pip deps, extras, and __init__.py presence
+install_node() {
+    local name="$1"
+    local repo="$2"
+    local extras="$3"
+    local max_retries=2
+    local attempt=0
 
-          # Always start clean — remove any partial/broken install
-          if [ -d "$name" ]; then
-              echo "[$name] Removing existing directory..."
-              rm -rf "$name"
-          fi
+    while [ $attempt -lt $max_retries ]; do
+        attempt=$((attempt + 1))
+        echo ""
+        echo "[$name] Attempt $attempt/$max_retries"
 
-          # 1. Git clone with verification
-          echo "[$name] Cloning..."
-          if ! git clone --depth 1 "$repo" 2>&1; then
-              echo "[$name] ERROR: git clone failed"
-              continue
-          fi
+        # Always start clean — remove any partial/broken install
+        if [ -d "$name" ]; then
+            echo "[$name] Removing existing directory..."
+            rm -rf "$name"
+        fi
 
-          # Verify clone completed (has .git dir and at least an __init__.py or py files)
-          if [ ! -d "$name/.git" ]; then
-              echo "[$name] ERROR: .git directory missing after clone"
-              rm -rf "$name"
-              continue
-          fi
+        # 1. Git clone with verification
+        echo "[$name] Cloning..."
+        if ! git clone --depth 1 "$repo" 2>&1; then
+            echo "[$name] ERROR: git clone failed"
+            continue
+        fi
 
-          if [ ! -f "$name/__init__.py" ] && [ -z "$(ls "$name"/*.py 2>/dev/null)" ]; then
-              echo "[$name] WARNING: No Python files found — clone may be incomplete"
-          fi
+        # Verify clone completed (has .git dir and at least an __init__.py or py files)
+        if [ ! -d "$name/.git" ]; then
+            echo "[$name] ERROR: .git directory missing after clone"
+            rm -rf "$name"
+            continue
+        fi
 
-          cd "$name"
+        if [ ! -f "$name/__init__.py" ] && [ -z "$(ls "$name"/*.py 2>/dev/null)" ]; then
+            echo "[$name] WARNING: No Python files found — clone may be incomplete"
+        fi
 
-          # 2. Install pip dependencies with exit code check
-          if [ -f "requirements.txt" ]; then
-              echo "[$name] Installing pip dependencies..."
-              if ! $PIP install -r requirements.txt 2>&1; then
-                  echo "[$name] ERROR: pip install failed"
-                  cd ..
-                  rm -rf "$name"
-                  continue
-              fi
-          fi
+        cd "$name"
 
-          # 3. Run extras (install.py, extra pip packages, etc.)
-          if [ -n "$extras" ]; then
-              echo "[$name] Running extras..."
-              if ! eval "$extras" 2>&1; then
-                  echo "[$name] ERROR: extras command failed"
-                  cd ..
-                  rm -rf "$name"
-                  continue
-              fi
-          fi
+        # 2. Install pip dependencies with exit code check
+        if [ -f "requirements.txt" ]; then
+            echo "[$name] Installing pip dependencies..."
+            if ! $PIP install -r requirements.txt 2>&1; then
+                echo "[$name] ERROR: pip install failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
 
-          cd ..
+        # 3. Run extras (install.py, extra pip packages, etc.)
+        if [ -n "$extras" ]; then
+            echo "[$name] Running extras..."
+            if ! eval "$extras" 2>&1; then
+                echo "[$name] ERROR: extras command failed"
+                cd ..
+                rm -rf "$name"
+                continue
+            fi
+        fi
 
-          # 4. Final verification — directory exists and has Python files
-          if [ -d "$name" ] && [ -d "$name/.git" ]; then
-              local py_count
-              py_count=$(find "$name" -maxdepth 2 -name "*.py" | head -5 | wc -l)
-              if [ "$py_count" -gt 0 ]; then
-                  echo "[$name] OK — installed and verified ($py_count+ .py files found)"
-                  return 0
-              else
-                  echo "[$name] ERROR: No .py files found after install"
-                  rm -rf "$name"
-                  continue
-              fi
-          fi
-      done
+        cd ..
 
-      # All retries exhausted
-      echo "[$name] FAILED after $max_retries attempts!"
-      FAILED_NODES="$FAILED_NODES $name"
-      return 1
-  }
+        # 4. Final verification — directory exists and has Python files
+        if [ -d "$name" ] && [ -d "$name/.git" ]; then
+            local py_count
+            py_count=$(find "$name" -maxdepth 2 -name "*.py" | head -5 | wc -l)
+            if [ "$py_count" -gt 0 ]; then
+                echo "[$name] OK — installed and verified ($py_count+ .py files found)"
+                return 0
+            else
+                echo "[$name] ERROR: No .py files found after install"
+                rm -rf "$name"
+                continue
+            fi
+        fi
+    done
 
-  # Temporarily allow failures so one bad node doesn't abort the whole script
-  set +e
+    # All retries exhausted
+    echo "[$name] FAILED after $max_retries attempts!"
+    FAILED_NODES="$FAILED_NODES $name"
+    return 1
+}
 
-  # --- LTX-Video ---
-  install_node "ComfyUI-LTXVideo" "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
+# Temporarily allow failures so one bad node doesn't abort the whole script
+set +e
 
-  # --- ComfyMath ---
-  install_node "ComfyMath" "https://github.com/evanspearman/ComfyMath.git"
+# --- LTX-Video ---
+install_node "ComfyUI-LTXVideo" "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
 
-  # --- ComfyUI-Impact-Pack ---
-  install_node "ComfyUI-Impact-Pack" "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git" \
-      '[ -f "install.py" ] && $PYTHON install.py'
+# --- ComfyMath ---
+install_node "ComfyMath" "https://github.com/evanspearman/ComfyMath.git"
 
-  # --- TTP Toolset ---
-  install_node "Comfyui_TTP_Toolset" "https://github.com/TTPlanetPig/Comfyui_TTP_Toolset.git" \
-      '$PIP install opencv-python numpy'
+# --- ComfyUI-Impact-Pack ---
+install_node "ComfyUI-Impact-Pack" "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git" \
+    '[ -f "install.py" ] && $PYTHON install.py'
 
-  # --- VideoHelperSuite ---
-  install_node "ComfyUI-VideoHelperSuite" "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
+# --- TTP Toolset ---
+install_node "Comfyui_TTP_Toolset" "https://github.com/TTPlanetPig/Comfyui_TTP_Toolset.git" \
+    '$PIP install opencv-python numpy'
 
-  # --- KJNodes ---
-  install_node "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
+# --- VideoHelperSuite ---
+install_node "ComfyUI-VideoHelperSuite" "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git"
 
-  # --- rgthree-comfy ---
-  install_node "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
+# --- KJNodes ---
+install_node "ComfyUI-KJNodes" "https://github.com/kijai/ComfyUI-KJNodes.git"
 
-  # Re-enable strict error handling
-  set -e
+# --- rgthree-comfy ---
+install_node "rgthree-comfy" "https://github.com/rgthree/rgthree-comfy.git"
 
-  # --- Summary ---
-  echo ""
-  echo "========== CUSTOM NODE INSTALL SUMMARY =========="
-  if [ -z "$FAILED_NODES" ]; then
-      echo "ALL 7 custom nodes installed and verified successfully!"
-  else
-      echo "FAILED NODES:$FAILED_NODES"
-      echo "These nodes will need manual installation."
-  fi
-  echo "================================================="
+# --- Custom-Scripts (ResizeImagesByLongerEdge, GetImageSize) ---
+install_node "ComfyUI-Custom-Scripts" "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git"
 
-  # ============================================
-  # PART 4: DOWNLOAD LTX-VIDEO MODELS
-  # ============================================
-  echo ""
-  echo "--- Downloading LTX-Video Models ---"
+# Re-enable strict error handling
+set -e
 
-  cd "$COMFY_ROOT/models"
+# --- Summary ---
+echo ""
+echo "========== CUSTOM NODE INSTALL SUMMARY =========="
+if [ -z "$FAILED_NODES" ]; then
+    echo "ALL 7 custom nodes installed and verified successfully!"
+else
+    echo "FAILED NODES:$FAILED_NODES"
+    echo "These nodes will need manual installation."
+fi
+echo "================================================="
 
-  # A. LTX-2 Checkpoints
-  cd checkpoints
+cd ..
 
-  # Dev variant (higher quality, more steps)
-  if [ ! -f "ltx-2-19b-dev-fp8.safetensors" ]; then
-      echo "Downloading LTX-2 Dev Checkpoint..."
-      wget -O ltx-2-19b-dev-fp8.safetensors
-  "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors?download=true"
-  else
-      echo "LTX-2 Dev Checkpoint already exists"
-  fi
+# ============================================
+# PART 4: DOWNLOAD LTX-VIDEO MODELS
+# ============================================
+echo ""
+echo "--- Downloading LTX-Video Models ---"
 
-  # B. LTX Upscaler
-  mkdir -p "$COMFY_ROOT/models/latent_upscale_models"
-  cd "$COMFY_ROOT/models/latent_upscale_models"
-  if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
-      echo "Downloading LTX Upscaler..."
-      wget -O ltx-2-spatial-upscaler-x2-1.0.safetensors
-  "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors?download=true"
-  else
-      echo "LTX Upscaler already exists"
-  fi
+# A. LTX-2 Checkpoint (~27GB)
+cd models/checkpoints
+if [ ! -f "ltx-2-19b-dev-fp8.safetensors" ]; then
+    echo "Downloading LTX-2 Checkpoint..."
+    wget -O ltx-2-19b-dev-fp8.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-dev-fp8.safetensors?download=true"
+else
+    echo "LTX-2 Checkpoint already exists"
+fi
 
-  # C. Gemma 3 Text Encoder (Folder Structure)
-  #    Uses unsloth mirror (ungated, no HF auth required).
-  #    LTXVGemmaCLIPModelLoader resolves to:
-  #      gemma-3-12b-it-bnb-4bit/model-00001-of-00002.safetensors
-  #    The full directory including tokenizer.model must be present.
-  mkdir -p "$COMFY_ROOT/models/text_encoders"
-  cd "$COMFY_ROOT/models/text_encoders"
-  if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
-      echo "Downloading Gemma 3 12B (bnb-4bit) from unsloth mirror..."
-      git clone https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
-  else
-      echo "Gemma 3 already exists"
-  fi
+# B. LTX Upscaler
+mkdir -p ../latent_upscale_models
+cd ../latent_upscale_models
+if [ ! -f "ltx-2-spatial-upscaler-x2-1.0.safetensors" ]; then
+    echo "Downloading LTX Upscaler..."
+    wget -O ltx-2-spatial-upscaler-x2-1.0.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-spatial-upscaler-x2-1.0.safetensors?download=true"
+else
+    echo "LTX Upscaler already exists"
+fi
 
-  # Verify tokenizer.model is present (critical file the loader checks for)
-  if [ ! -f "gemma-3-12b-it-bnb-4bit/tokenizer.model" ]; then
-      echo "ERROR: tokenizer.model missing — Gemma clone may be incomplete!"
-      echo "Removing and re-downloading..."
-      rm -rf gemma-3-12b-it-bnb-4bit
-      git clone https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
-  fi
+mkdir -p ../loras
+cd ../loras
+if [ ! -f "ltx-2-19b-distilled-lora-384.safetensors" ]; then
+    echo "Downloading LTX-2 Distilled LoRA..."
+    wget -O ltx-2-19b-distilled-lora-384.safetensors "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors?download=true"
+else
+    echo "LTX-2 Distilled LoRA already exists"
+fi
 
-  # ============================================
-  # PART 5: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
-  # ============================================
-  echo ""
-  echo "--- Setting up Z-Image-Turbo ---"
+mkdir -p LTX
+cd LTX
+if [ ! -f "ltx-2-19b-lora-camera-control-static.safetensors" ]; then
+    echo "Downloading LTX-2 Static Camera LoRA..."
+    wget -O ltx-2-19b-lora-camera-control-static.safetensors "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-control-static.safetensors?download=true"
+else
+    echo "LTX-2 Static Camera LoRA already exists"
+fi
+cd ../..
 
-  cd "$COMFY_ROOT/models"
 
-  # A. Text Encoder (Qwen) -> models/clip
-  mkdir -p clip
-  cd clip
-  if [ ! -f "qwen_3_4b.safetensors" ]; then
-      echo "Downloading Qwen Text Encoder..."
-      wget -O qwen_3_4b.safetensors
-  "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors"
-  else
-      echo "Qwen Text Encoder already exists"
-  fi
-  cd ..
+# C. Gemma 3 Text Encoder (Folder Structure)
+mkdir -p ../text_encoders
+cd ../text_encoders
+if [ ! -d "gemma-3-12b-it-bnb-4bit" ]; then
+    echo "Downloading Gemma 3..."
+    git clone https://huggingface.co/unsloth/gemma-3-12b-it-bnb-4bit
+else
+    echo "Gemma 3 already exists"
+fi
 
-  # B. Diffusion Model (UNet) -> models/unet
-  mkdir -p unet
-  cd unet
-  if [ ! -f "z_image_turbo_bf16.safetensors" ]; then
-      echo "Downloading Z-Image UNet..."
-      wget -O z_image_turbo_bf16.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/di
-  ffusion_models/z_image_turbo_bf16.safetensors"
-  else
-      echo "Z-Image UNet already exists"
-  fi
-  cd ..
+# ============================================
+# PART 5: DOWNLOAD Z-IMAGE-TURBO (SPLIT FILES)
+# ============================================
+echo ""
+echo "--- Setting up Z-Image-Turbo ---"
 
-  # C. VAE -> models/vae
-  mkdir -p vae
-  cd vae
-  if [ ! -f "z_image_turbo_ae.safetensors" ]; then
-      echo "Downloading Z-Image VAE..."
-      wget -O z_image_turbo_ae.safetensors
-  "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
-  else
-      echo "Z-Image VAE already exists"
-  fi
-  cd ..
+cd /workspace/$COMFY_DIR/models
 
-  # ============================================
-  # PART 6: LORAS
-  # ============================================
-  echo ""
-  echo "--- Downloading LoRAs ---"
+# A. Text Encoder (Qwen) -> models/clip
+mkdir -p clip
+cd clip
+if [ ! -f "qwen_3_4b.safetensors" ]; then
+    echo "Downloading Qwen Text Encoder..."
+    wget -O qwen_3_4b.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors"
+else
+    echo "Qwen Text Encoder already exists"
+fi
+cd ..
 
-  mkdir -p "$COMFY_ROOT/models/loras"
-  cd "$COMFY_ROOT/models/loras"
+# B. Diffusion Model (UNet) -> models/unet
+mkdir -p unet
+cd unet
+if [ ! -f "z_image_turbo_bf16.safetensors" ]; then
+    echo "Downloading Z-Image UNet..."
+    wget -O z_image_turbo_bf16.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors"
+else
+    echo "Z-Image UNet already exists"
+fi
+cd ..
 
-  # Distilled LoRA (REQUIRED — Stage 2 of every LTX-2 dev clip)
-  if [ ! -f "ltx-2-19b-distilled-lora-384.safetensors" ]; then
-      echo "Downloading LTX-2 Distilled LoRA..."
-      wget -O ltx-2-19b-distilled-lora-384.safetensors \
-          "https://huggingface.co/Lightricks/LTX-2/resolve/main/ltx-2-19b-distilled-lora-384.safetensors?download=true"
-  else
-      echo "LTX-2 Distilled LoRA already exists"
-  fi
+# C. VAE -> models/vae
+mkdir -p vae
+cd vae
+if [ ! -f "z_image_turbo_ae.safetensors" ]; then
+    echo "Downloading Z-Image VAE..."
+    wget -O z_image_turbo_ae.safetensors "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors"
+else
+    echo "Z-Image VAE already exists"
+fi
+cd ..
 
-  # Static Camera LoRA (used for chained WIDE shots in blend mode)
-  mkdir -p LTX
-  cd LTX
-  if [ ! -f "ltx-2-19b-lora-camera-control-static.safetensors" ]; then
-      echo "Downloading LTX-2 Static Camera LoRA..."
-      wget -O ltx-2-19b-lora-camera-control-static.safetensors \
-          "https://huggingface.co/Lightricks/LTX-2-19b-LoRA-Camera-Control-Static/resolve/main/ltx-2-19b-lora-camera-con
-  trol-static.safetensors?download=true"
-  else
-      echo "LTX-2 Static Camera LoRA already exists"
-  fi
-  cd ..
+# ============================================
+# PART 6: QWEN3-TTS SETUP
+# ============================================
+echo ""
+echo "--- Setting up Qwen3-TTS ---"
 
-  # ============================================
-  # PART 7: FINAL VERIFICATION
-  # ============================================
-  echo ""
-  echo "=============================================="
-  echo "MODEL VERIFICATION"
-  echo "=============================================="
+# Upgrade PyTorch for RTX 5090 / Blackwell (sm_120) if needed
+if $PYTHON -c "import torch; exit(0 if 'sm_120' in torch.cuda.get_arch_list() else 1)" 2>/dev/null; then
+    echo "PyTorch already supports sm_120, skipping upgrade."
+else
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo "unknown")
+    if echo "$GPU_NAME" | grep -qi "5090\|5080\|5070"; then
+        echo "Blackwell GPU detected, upgrading PyTorch to cu128..."
+        $PIP install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+        $PYTHON -c "import torch; print('PyTorch upgraded to ' + torch.__version__)"
+    fi
+fi
 
-  MISSING=""
+# Install TTS Python dependencies
+echo "Installing Qwen3-TTS dependencies..."
+$PIP install qwen-tts soundfile fastapi uvicorn python-multipart
 
-  check_file() {
-      if [ -f "$1" ]; then
-          echo "  OK: $(basename "$1")"
-      else
-          echo "  MISSING: $1"
-          MISSING="$MISSING $1"
-      fi
-  }
+# Pre-download Qwen3-TTS models
+if [ -f /workspace/.tts_ready ]; then
+    echo "Qwen3-TTS models already downloaded, skipping."
+else
+    echo "Downloading Qwen3-TTS models (first run only)..."
+    $PYTHON -c "
+from qwen_tts import Qwen3TTSModel
+import torch
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+try:
+    import flash_attn
+    attn = 'flash_attention_2'
+except ImportError:
+    attn = 'sdpa'
+print('Using device=' + str(device) + ', dtype=' + str(dtype) + ', attn=' + attn)
+print('Downloading VoiceDesign model...')
+m1 = Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', device_map=device, dtype=dtype, attn_implementation=attn)
+del m1
+print('Downloading Base model...')
+m2 = Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-Base', device_map=device, dtype=dtype, attn_implementation=attn)
+del m2
+print('Models downloaded!')
+"
+    touch /workspace/.tts_ready
+    echo "Qwen3-TTS setup complete."
+fi
 
-  check_dir() {
-      if [ -d "$1" ] && [ -f "$1/$2" ]; then
-          echo "  OK: $(basename "$1")/ ($2 present)"
-      else
-          echo "  MISSING: $1/$2"
-          MISSING="$MISSING $1/$2"
-      fi
-  }
+# Create TTS server script
+cat > /workspace/tts_server.py << 'TTSEOF'
+import hashlib, io, os, torch
+from pathlib import Path
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
+import soundfile as sf
 
-  echo "LTX-2 Checkpoints:"
-  check_file "$COMFY_ROOT/models/checkpoints/ltx-2-19b-dev-fp8.safetensors"
+app = FastAPI(title="Qwen3-TTS Server")
+CACHE_DIR = Path("/workspace/.voice_cache")
+CACHE_DIR.mkdir(exist_ok=True)
+_voice_design_model = None
+_clone_model = None
+_voice_cache = {}
 
-  echo "LTX Upscaler:"
-  check_file "$COMFY_ROOT/models/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+class TTSRequest(BaseModel):
+    text: str
+    voice_instruct: str
+    language: str = "English"
 
-  echo "Gemma 3 Text Encoder:"
-  check_dir "$COMFY_ROOT/models/text_encoders/gemma-3-12b-it-bnb-4bit" "tokenizer.model"
-  check_file "$COMFY_ROOT/models/text_encoders/gemma-3-12b-it-bnb-4bit/model-00001-of-00002.safetensors"
+def _get_device():
+    if torch.cuda.is_available():
+        try:
+            import flash_attn
+            return "cuda:0", torch.bfloat16, "flash_attention_2"
+        except ImportError:
+            return "cuda:0", torch.bfloat16, "sdpa"
+    return "cpu", torch.float32, "sdpa"
 
-  echo "LoRAs:"
-  check_file "$COMFY_ROOT/models/loras/ltx-2-19b-distilled-lora-384.safetensors"
-  check_file "$COMFY_ROOT/models/loras/LTX/ltx-2-19b-lora-camera-control-static.safetensors"
+def _get_voice_design_model():
+    global _voice_design_model
+    if _voice_design_model is None:
+        from qwen_tts import Qwen3TTSModel
+        device, dtype, attn = _get_device()
+        _voice_design_model = Qwen3TTSModel.from_pretrained(
+            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", device_map=device, dtype=dtype, attn_implementation=attn)
+    return _voice_design_model
 
-  echo "Z-Image-Turbo:"
-  check_file "$COMFY_ROOT/models/clip/qwen_3_4b.safetensors"
-  check_file "$COMFY_ROOT/models/unet/z_image_turbo_bf16.safetensors"
-  check_file "$COMFY_ROOT/models/vae/z_image_turbo_ae.safetensors"
+def _get_clone_model():
+    global _clone_model
+    if _clone_model is None:
+        from qwen_tts import Qwen3TTSModel
+        device, dtype, attn = _get_device()
+        _clone_model = Qwen3TTSModel.from_pretrained(
+            "Qwen/Qwen3-TTS-12Hz-1.7B-Base", device_map=device, dtype=dtype, attn_implementation=attn)
+    return _clone_model
 
-  echo ""
-  if [ -z "$MISSING" ]; then
-      echo "ALL MODELS VERIFIED SUCCESSFULLY!"
-  else
-      echo "WARNING: Some models are missing. Check above for details."
-  fi
+def _get_or_create_voice_prompt(voice_instruct):
+    cache_key = hashlib.sha256(voice_instruct.encode()).hexdigest()[:16]
+    if cache_key in _voice_cache:
+        return _voice_cache[cache_key]
+    cache_path = CACHE_DIR / f"voice_{cache_key}.pt"
+    if cache_path.exists():
+        try:
+            data = torch.load(cache_path, weights_only=False)
+            _voice_cache[cache_key] = data
+            return data
+        except Exception:
+            pass
+    design_model = _get_voice_design_model()
+    clone_model = _get_clone_model()
+    ref_text = "Hello, this is my voice. I hope you enjoy listening to me speak."
+    ref_wavs, sr = design_model.generate_voice_design(
+        text=ref_text, language="English", instruct=voice_instruct, do_sample=False)
+    voice_clone_prompt = clone_model.create_voice_clone_prompt(ref_audio=(ref_wavs[0], sr), ref_text=ref_text)
+    _voice_cache[cache_key] = voice_clone_prompt
+    try:
+        torch.save(voice_clone_prompt, cache_path)
+    except Exception:
+        pass
+    return voice_clone_prompt
 
-  # ============================================
-  # PART 8: RESTART COMFYUI
-  # ============================================
-  echo ""
-  echo "=============================================="
-  echo "ALL DONE! Restarting ComfyUI..."
-  echo "=============================================="
+@app.get("/health")
+def health_check():
+    device, _, attn = _get_device()
+    return {"status": "ok", "device": f"{device} ({attn})",
+            "models_loaded": _voice_design_model is not None and _clone_model is not None}
 
-  if command -v supervisorctl &> /dev/null; then
-      supervisorctl restart comfyui
-      echo "ComfyUI restarted with RTX 5090 optimizations + all models loaded!"
-  else
-      echo "Please restart ComfyUI manually."
-  fi
+@app.post("/generate")
+def generate_tts(request: TTSRequest):
+    try:
+        voice_clone_prompt = _get_or_create_voice_prompt(request.voice_instruct)
+        clone_model = _get_clone_model()
+        wavs, sr = clone_model.generate_voice_clone(
+            text=request.text, language=request.language,
+            voice_clone_prompt=voice_clone_prompt, do_sample=False)
+        buffer = io.BytesIO()
+        sf.write(buffer, wavs[0], sr, format="WAV")
+        buffer.seek(0)
+        return Response(content=buffer.read(), media_type="audio/wav", headers={"X-Sample-Rate": str(sr)})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/warmup")
+def warmup():
+    try:
+        _get_voice_design_model()
+        _get_clone_model()
+        return {"status": "models loaded"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8765)
+TTSEOF
+
+echo "TTS server script created at /workspace/tts_server.py"
+
+# ============================================
+# PART 7: RESTART COMFYUI
+# ============================================
+echo ""
+echo "=============================================="
+echo "ALL DONE! Restarting ComfyUI..."
+echo "=============================================="
+
+if command -v supervisorctl &> /dev/null; then
+    supervisorctl restart comfyui
+    echo "ComfyUI restarted with RTX 5090 optimizations + all models loaded!"
+else
+    echo "Please restart ComfyUI manually."
